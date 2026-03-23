@@ -18,7 +18,7 @@ def main(session: Any = None) -> None:
     """Run the example. Pass a session for testing, or None to auto-connect."""
     if session is None:
         app = SapGui.connect()
-        session = app.connections[0].sessions[0]
+        session = app.connections[0].sessions[0]  # type: ignore[attr-defined]
 
     # Print current session info
     info = session.info

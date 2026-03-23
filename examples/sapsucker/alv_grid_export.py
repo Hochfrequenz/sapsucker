@@ -19,7 +19,7 @@ def main(session: Any = None) -> None:
     """Run the example. Pass a session for testing, or None to auto-connect."""
     if session is None:
         app = SapGui.connect()
-        session = app.connections[0].sessions[0]
+        session = app.connections[0].sessions[0]  # type: ignore[attr-defined]
 
     # Navigate to SE16N
     session.find_by_id("wnd[0]/tbar[0]/okcd").text = "/nSE16N"
