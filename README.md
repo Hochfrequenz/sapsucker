@@ -47,23 +47,11 @@ print(session.find_by_id("wnd[0]/sbar").text)
 
 ## Why sapsucker?
 
-| Feature                       | sapsucker | pysapscript | sapguipy | raw COM |
-| ----------------------------- | --------- | ----------- | -------- | ------- |
-| Typed wrappers (40+ classes)  | Yes       | No          | No       | No      |
-| IDE autocomplete              | Yes       | No          | No       | No      |
-| Type hints on every method    | Yes       | No          | No       | No      |
-| Docstrings with SAP context   | Yes       | Partial     | No       | No      |
-| Unit tests                    | 430+      | No          | No       | —       |
-| Integration tests (real SAP)  | 50+       | No          | No       | —       |
-| Linting (pylint, mypy, black) | Yes       | No          | No       | —       |
-| API verified against PDF      | Yes       | No          | No       | —       |
-| License                       | MIT       | GPL-3       | MIT      | —       |
-
-Other Python libraries for SAP GUI (`pysapscript`, `PySapGUI`, `sapguipy`,
-`robotframework-sapguilibrary`) use generic `read()`/`write()` methods or
-Robot Framework keywords. sapsucker wraps each SAP GUI element type with its
-own Python class, so `GuiGridView` has `get_cell_value()` and `GuiTree` has
-`expand_node()` — not `element.read("cell", row, col)`.
+- **40+ typed wrapper classes** — `GuiGridView.get_cell_value()`, `GuiTree.expand_node()`, not generic `element.read("cell", row, col)`
+- **IDE autocomplete & type hints** on every method and property
+- **430+ unit tests**, 50+ integration tests verified against real SAP S/4 HANA
+- **API verified** against the SAP GUI Scripting API 6.40 PDF (2969 pages)
+- **MIT licensed** — no GPL restrictions
 
 ## Installation
 
