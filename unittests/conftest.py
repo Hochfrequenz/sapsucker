@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import socket
+import os
 from collections.abc import Generator
 from unittest.mock import MagicMock, PropertyMock
 
@@ -12,16 +12,22 @@ import pytest
 # SAP INTEGRATION TEST MACHINE CHECK
 # =============================================================================
 
-_AUTHORIZED_SAP_TEST_MACHINES = {"HF-KKLEIN3", "HF-MeiskeJ"}
-
 
 def is_sap_integration_test_machine() -> bool:
-    """Check if the current machine is authorized to run SAP integration tests.
+    """Check if SAP integration tests should run.
 
-    SAP integration tests require access to a real SAP GUI system,
-    which is only available on specific developer machines.
+    Integration tests run by default on any machine EXCEPT CI environments.
+    They require SAP GUI for Windows to be running with scripting enabled.
+
+    Set ``SAP_SKIP_INTEGRATION=1`` to explicitly skip on a local machine.
     """
-    return socket.gethostname() in _AUTHORIZED_SAP_TEST_MACHINES
+    # Skip on CI (GitHub Actions, GitLab CI, Jenkins, etc.)
+    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+        return False
+    # Allow explicit opt-out on local machines
+    if os.environ.get("SAP_SKIP_INTEGRATION"):
+        return False
+    return True
 
 
 # =============================================================================

@@ -1,13 +1,4 @@
-# sapsucker
-
-```
-    ⊹
-   /▲\      ╭─────────────────────────────────╮
-  (●  >     │  tapping into SAP,              │
-   ║║║  ━━━━│  one typed wrapper at a time 🌳 │
-  / ║ \     ╰─────────────────────────────────╯
- ╱  ║  ╲
-```
+# 🐦 sapsucker
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python Version](https://img.shields.io/pypi/pyversions/sapsucker)](https://www.python.org/downloads/)
@@ -209,13 +200,12 @@ Integration tests run against a real SAP GUI system and are automatically skippe
    SAP_MANDANT=your_client
    SAP_LANGUAGE=EN
    ```
-3. Add your machine's hostname to `_AUTHORIZED_SAP_TEST_MACHINES` in `unittests/conftest.py`
-4. Run:
+3. Run:
    ```bash
    pytest unittests/ -k integration -v
    ```
 
-Integration tests cover SE80 (tree), SE16N (grid), SE37 (table/tab), SE38 (editor), and SM37 (fields/window). They are read-only and do not modify SAP data.
+Integration tests run by default on any local machine and are automatically skipped in CI (GitHub Actions). Set `SAP_SKIP_INTEGRATION=1` to skip them locally. They cover SE80, SE16N, SE37, SE38, and SM37 — all read-only, no SAP data is modified.
 
 ## License
 
