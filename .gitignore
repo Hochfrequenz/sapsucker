@@ -134,3 +134,4 @@ dmypy.json
 .vscode/
 
 src/_your_package_version.py
+src/_sapsucker_version.py

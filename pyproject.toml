@@ -69,6 +69,7 @@ profile = "black"
 
 [tool.pylint."MESSAGES CONTROL"]
 max-line-length = 120
+disable = ["too-many-public-methods", "broad-exception-caught"]
 
 [mypy]
 truethy-bool = true

@@ -204,12 +204,30 @@ git clone https://github.com/Hochfrequenz/sapsucker.git
 cd sapsucker
 pip install -e ".[dev]"
 
-# Run unit tests (no SAP required)
+# Run unit tests (no SAP required, works on any OS)
 pytest unittests/ -v
-
-# Run integration tests (requires SAP GUI + credentials in .env)
-pytest unittests/ -k integration -v
 ```
+
+### Integration tests against real SAP
+
+Integration tests run against a real SAP GUI system and are automatically skipped on machines without SAP access. To run them locally:
+
+1. **SAP GUI for Windows** must be running with scripting enabled
+2. Create a `.env` file with your SAP credentials:
+   ```
+   SAP_CONNECTION_NAME=your_connection
+   SAP_USER=your_user
+   SAP_PASSWORD=your_password
+   SAP_MANDANT=your_client
+   SAP_LANGUAGE=EN
+   ```
+3. Add your machine's hostname to `_AUTHORIZED_SAP_TEST_MACHINES` in `unittests/conftest.py`
+4. Run:
+   ```bash
+   pytest unittests/ -k integration -v
+   ```
+
+Integration tests cover SE80 (tree), SE16N (grid), SE37 (table/tab), SE38 (editor), and SM37 (fields/window). They are read-only and do not modify SAP data.
 
 ## License
 
