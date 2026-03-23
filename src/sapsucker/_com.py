@@ -34,8 +34,11 @@ Example::
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 from sapsucker._errors import SapConnectionError, SapGuiTimeoutError, ScriptingDisabledError
 
@@ -75,6 +78,12 @@ def _connect_to_running_sap_gui() -> GuiApplication:
 
     from sapsucker.components.application import GuiApplication
 
+    conn_count = 0
+    try:
+        conn_count = engine.Children.Count
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    logger.info("sap_gui_connected", extra={"connections": conn_count})
     return GuiApplication(engine)
 
 

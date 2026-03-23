@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from sapsucker._errors import ElementNotFoundError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from sapsucker.components.collection import GuiComponentCollection
@@ -184,6 +187,7 @@ class GuiContainer(GuiComponent):
 
         result = self._com.FindById(id, False)
         if result is None:
+            logger.debug("element_not_found", extra={"id": id, "parent": self.id})
             if raise_error:
                 raise ElementNotFoundError(f"Element not found: {id}")
             return None

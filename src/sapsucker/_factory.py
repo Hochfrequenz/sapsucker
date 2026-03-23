@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sapsucker.components.application import GuiApplication
 from sapsucker.components.base import GuiComponent
@@ -129,4 +132,8 @@ def wrap_com_object(com_obj: Any) -> GuiComponent:
         cls = _SHELL_SUBTYPE_MAP.get(sub_type, GuiShell)
     elif cls is None:
         cls = GuiComponent
+        logger.debug(
+            "unknown_type_fallback",
+            extra={"type_as_number": type_num, "com_type": getattr(com_obj, "Type", "?")},
+        )
     return cls(com_obj)
