@@ -131,7 +131,14 @@ with SapGui.connect() as app:
 # All connections closed automatically
 ```
 
-See the `examples/sapsucker/` directory for complete runnable scripts.
+### More examples
+
+The [`examples/sapsucker/`](examples/sapsucker) directory contains complete runnable scripts, all tested against a real SAP system:
+
+- [`basic_navigation.py`](examples/sapsucker/basic_navigation.py) — connect, read session info, navigate transactions
+- [`alv_grid_export.py`](examples/sapsucker/alv_grid_export.py) — query SE16N and read ALV grid data
+- [`form_filling.py`](examples/sapsucker/form_filling.py) — fill selection screens and execute reports
+- [`tree_navigation.py`](examples/sapsucker/tree_navigation.py) — browse and expand tree controls in SE80
 
 ## Architecture
 
