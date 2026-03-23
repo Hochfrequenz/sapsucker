@@ -7,6 +7,7 @@ from collections.abc import Generator
 from unittest.mock import MagicMock, PropertyMock
 
 import pytest
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # =============================================================================
 # SAP INTEGRATION TEST MACHINE CHECK
@@ -108,6 +109,23 @@ def mock_com():
 
 
 # =============================================================================
+# SAP TEST SETTINGS (pydantic-settings)
+# =============================================================================
+
+
+class SapTestSettings(BaseSettings):
+    """SAP credentials for integration tests. Loaded from .env file."""
+
+    sap_connection_name: str = ""
+    sap_user: str = ""
+    sap_password: str = ""
+    sap_mandant: str = ""
+    sap_language: str = "DE"
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+
+# =============================================================================
 # SAP DESKTOP SESSION FIXTURE
 # =============================================================================
 
@@ -116,34 +134,30 @@ def mock_com():
 def sap_desktop_session() -> Generator:
     """Provide a logged-in SAP GUI desktop session for integration tests.
 
-    Skips if not on the authorized SAP test machine or if required env vars are missing.
+    Skips if not on a SAP-capable machine or if credentials are missing.
+    Credentials are loaded from .env via pydantic-settings.
     """
     if not is_sap_integration_test_machine():
-        pytest.skip("Not on SAP integration test machine")
+        pytest.skip("SAP integration tests skipped (CI or SAP_SKIP_INTEGRATION set)")
 
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    import os
+    settings = SapTestSettings()
+    if not settings.sap_connection_name:
+        pytest.skip("SAP_CONNECTION_NAME not set in .env")
+    if not settings.sap_user:
+        pytest.skip("SAP_USER not set in .env")
+    if not settings.sap_password:
+        pytest.skip("SAP_PASSWORD not set in .env")
+    if not settings.sap_mandant:
+        pytest.skip("SAP_MANDANT not set in .env")
 
     from sapsucker.login import login, logoff
 
-    if not os.environ.get("SAP_CONNECTION_NAME"):
-        pytest.skip("SAP_CONNECTION_NAME not set")
-    if not os.environ.get("SAP_USER"):
-        pytest.skip("SAP_USER not set")
-    if not os.environ.get("SAP_PASSWORD"):
-        pytest.skip("SAP_PASSWORD not set")
-    if not os.environ.get("SAP_MANDANT"):
-        pytest.skip("SAP_MANDANT not set")
-
     session = login(
-        connection_name=os.environ["SAP_CONNECTION_NAME"],
-        client=os.environ["SAP_MANDANT"],
-        user=os.environ["SAP_USER"],
-        password=os.environ["SAP_PASSWORD"],
-        language=os.environ.get("SAP_LANGUAGE", "DE"),
+        connection_name=settings.sap_connection_name,
+        client=settings.sap_mandant,
+        user=settings.sap_user,
+        password=settings.sap_password,
+        language=settings.sap_language,
     )
     yield session
     logoff(session)
