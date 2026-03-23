@@ -3,7 +3,7 @@ name = "sapsucker"
 description = "Typed Python wrapper for the SAP GUI Scripting COM API"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-authors = [{ name = "Hochfrequenz Unternehmensberatung GmbH", email = "oss-2023@2800hz.com" }]
+authors = [{ name = "Hochfrequenz Unternehmensberatung GmbH", email = "info+github@hochfrequenz.de" }]
 keywords = ["sap", "sapgui", "scripting", "com", "automation", "typed"]
 classifiers = [
     "Development Status :: 4 - Beta",
