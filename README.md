@@ -1,5 +1,14 @@
 # sapsucker
 
+```
+    ⊹
+   /▲\      ╭─────────────────────────────────╮
+  (●  >     │  tapping into SAP,              │
+   ║║║  ━━━━│  one typed wrapper at a time 🌳 │
+  / ║ \     ╰─────────────────────────────────╯
+ ╱  ║  ╲
+```
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python Version](https://img.shields.io/pypi/pyversions/sapsucker)](https://www.python.org/downloads/)
 [![PyPI version](https://img.shields.io/pypi/v/sapsucker)](https://pypi.org/project/sapsucker/)
