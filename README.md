@@ -67,10 +67,8 @@ own Python class, so `GuiGridView` has `get_cell_value()` and `GuiTree` has
 
 ## Installation
 
-> **Note:** sapsucker is not yet published on PyPI. Install from the repository:
-
 ```bash
-pip install git+https://github.com/Hochfrequenz/sapsucker.git
+pip install sapsucker
 ```
 
 ### Prerequisites
