@@ -119,9 +119,9 @@ def sap_desktop_session() -> Generator:
 
     load_dotenv()
 
-    from sapsucker.login import login, logoff
-
     import os
+
+    from sapsucker.login import login, logoff
 
     if not os.environ.get("SAP_CONNECTION_NAME"):
         pytest.skip("SAP_CONNECTION_NAME not set")

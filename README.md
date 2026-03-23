@@ -53,14 +53,14 @@ own Python class, so `GuiGridView` has `get_cell_value()` and `GuiTree` has
 > **Note:** sapsucker is not yet published on PyPI. Install from the repository:
 
 ```bash
-pip install git+https://github.com/Hochfrequenz/sapwebgui.mcp.git
+pip install git+https://github.com/Hochfrequenz/sapsucker.git
 ```
 
 ### Prerequisites
 
 - **SAP GUI for Windows** (7.x or 8.x)
 - **SAP GUI Scripting enabled** — ask your SAP Basis team to set `sapgui/user_scripting = TRUE` in transaction RZ11, and enable scripting in your SAP GUI options (Customize Local Layout → Accessibility & Scripting)
-- **Python 3.10+** on Windows
+- **Python 3.11+** on Windows
 
 ## Usage Examples
 
@@ -176,15 +176,15 @@ Contributions are welcome! Please open an issue first to discuss what you'd like
 
 ```bash
 # Clone and install dev dependencies
-git clone https://github.com/Hochfrequenz/sapwebgui.mcp.git
-cd sapwebgui.mcp
+git clone https://github.com/Hochfrequenz/sapsucker.git
+cd sapsucker
 pip install -e ".[dev]"
 
 # Run unit tests (no SAP required)
-pytest unittests/sapgui/ -v
+pytest unittests/ -v
 
 # Run integration tests (requires SAP GUI + credentials in .env)
-pytest unittests/sapgui/ -k integration -v
+pytest unittests/ -k integration -v
 
 # Format
 black src/ unittests/ examples/

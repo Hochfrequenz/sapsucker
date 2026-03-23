@@ -40,13 +40,9 @@ def _has_active_session() -> bool:
         return False
 
 
-def _login_creds_configured() -> bool:    """Check whether SAP login credentials are configured."""    return False  # Not used in standalone sapsucker tests
-        import os
-
-        s = get_settings()
-        return bool(s.sap_connection_name and s.sap_user and s.sap_password and s.sap_mandant)
-    except Exception:
-        return False
+def _login_creds_configured() -> bool:
+    """Check whether SAP login credentials are configured."""
+    return False  # Not used in standalone sapsucker tests
 
 
 # Guards for different test categories
@@ -166,4 +162,3 @@ def test_read_statusbar_text():
     session = _get_session()
     sbar = session.find_by_id("wnd[0]/sbar")
     assert isinstance(sbar.text, str)
-

@@ -12,6 +12,7 @@ __all__ = [
     "GuiDialogShell",
     "GuiDockShell",
     "GuiGOSShell",
+    "GuiScrollbar",
     "GuiScrollContainer",
     "GuiSimpleContainer",
     "GuiSplitterContainer",
