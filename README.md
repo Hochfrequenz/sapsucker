@@ -1,5 +1,13 @@
 # sapsucker
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python Version](https://img.shields.io/pypi/pyversions/sapsucker)](https://www.python.org/downloads/)
+[![PyPI version](https://img.shields.io/pypi/v/sapsucker)](https://pypi.org/project/sapsucker/)
+![Unittests](https://github.com/Hochfrequenz/sapsucker/actions/workflows/unittests.yml/badge.svg)
+![Linting](https://github.com/Hochfrequenz/sapsucker/actions/workflows/pythonlint.yml/badge.svg)
+![Formatting](https://github.com/Hochfrequenz/sapsucker/actions/workflows/formatting.yml/badge.svg)
+![Coverage](https://github.com/Hochfrequenz/sapsucker/actions/workflows/coverage.yml/badge.svg)
+
 Typed Python wrapper for the SAP GUI Scripting API.
 
 **sapsucker** gives you typed, IDE-friendly access to SAP GUI for Windows.
