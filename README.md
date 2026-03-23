@@ -189,6 +189,8 @@ and an `asyncio.to_thread()` example.
 
 Contributions are welcome! Please open an issue first to discuss what you'd like to change.
 
+For detailed setup instructions (tox environments, CI, linting, formatting, etc.), see the [Hochfrequenz Python Template Repository](https://github.com/Hochfrequenz/python_template_repository).
+
 ```bash
 # Clone and install dev dependencies
 git clone https://github.com/Hochfrequenz/sapsucker.git
@@ -200,10 +202,6 @@ pytest unittests/ -v
 
 # Run integration tests (requires SAP GUI + credentials in .env)
 pytest unittests/ -k integration -v
-
-# Format
-black src/ unittests/ examples/
-isort src/ unittests/ examples/
 ```
 
 ## License
