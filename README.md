@@ -15,6 +15,8 @@ Instead of working with raw COM objects and guessing method names, you get
 Python classes with autocomplete, type hints, and docstrings for every
 SAP GUI element.
 
+Named after the [sapsucker](https://en.wikipedia.org/wiki/Sapsucker) — a woodpecker that taps into trees to drink their sap. This library taps into SAP GUI to extract your data.
+
 ## Quickstart
 
 ```python
