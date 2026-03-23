@@ -38,8 +38,6 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-logger = logging.getLogger(__name__)
-
 from sapsucker._errors import SapConnectionError, SapGuiTimeoutError, ScriptingDisabledError
 
 try:
@@ -51,6 +49,8 @@ except ImportError:
 
 if TYPE_CHECKING:
     from sapsucker.components.application import GuiApplication
+
+logger = logging.getLogger(__name__)
 
 
 def _connect_to_running_sap_gui() -> GuiApplication:

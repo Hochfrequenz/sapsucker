@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING, Any
 
 from sapsucker._errors import ElementNotFoundError
 
-logger = logging.getLogger(__name__)
-
 if TYPE_CHECKING:
     from sapsucker.components.collection import GuiComponentCollection
     from sapsucker.models import ElementInfo
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["GuiComponent", "GuiContainer", "GuiVComponent", "GuiVContainer"]
 

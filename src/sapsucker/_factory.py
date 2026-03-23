@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from sapsucker.components.application import GuiApplication
 from sapsucker.components.base import GuiComponent
 from sapsucker.components.button import GuiButton
@@ -57,6 +55,8 @@ from sapsucker.components.window import (
     GuiMessageWindow,
     GuiModalWindow,
 )
+
+logger = logging.getLogger(__name__)
 
 # Level 1: TypeAsNumber -> Python class
 _TYPE_MAP: dict[int, type[GuiComponent]] = {
