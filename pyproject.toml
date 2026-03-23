@@ -1,24 +1,29 @@
 [project]
-name = "your-favourite-package-name"
-description = "Description of your package"
+name = "sapsucker"
+description = "Typed Python wrapper for the SAP GUI Scripting COM API"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-authors = [{ name = "your name", email = "your@email.address" }]
-keywords = ["your", "important", "keywords"]
+authors = [{ name = "Hochfrequenz Unternehmensberatung GmbH", email = "oss-2023@2800hz.com" }]
+keywords = ["sap", "sapgui", "scripting", "com", "automation", "typed"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Testing",
 ]
-dependencies = []     # add all the dependencies here
+dependencies = [
+    "pywin32>=306; sys_platform == 'win32'",
+    "pydantic>=2.0",
+]
 dynamic = ["readme", "version"]
 
 [project.optional-dependencies]
@@ -51,8 +56,8 @@ dev = [
 
 
 [project.urls]
-Changelog = "https://github.com/Hochfrequenz/python_template_repository/releases"
-Homepage = "https://github.com/Hochfrequenz/python_template_repository"
+Changelog = "https://github.com/Hochfrequenz/sapsucker/releases"
+Homepage = "https://github.com/Hochfrequenz/sapsucker"
 
 [tool.black]
 line-length = 120
@@ -83,7 +88,7 @@ fragments = [{ path = "README.md" }]
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/_your_package_version.py"
+version-file = "src/_sapsucker_version.py"
 template = '''
 version = "{version}"
 '''
@@ -94,3 +99,6 @@ exclude = ["/unittests"]
 [tool.hatch.build.targets.wheel]
 only-include = ["src"]
 sources = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["unittests"]
