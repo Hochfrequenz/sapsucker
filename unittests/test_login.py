@@ -10,12 +10,12 @@ import pytest
 from sapsucker._errors import SapConnectionError, SapGuiTimeoutError
 from sapsucker.login import (
     _FALLBACK_SAPLOGON_PATH,
-    _discover_saplogon_path,
     _handle_multiple_logon_popup,
-    _wait_for_session,
     cleanup_ghost_connections,
+    discover_saplogon_path,
     login,
     logoff,
+    wait_for_session,
 )
 
 
@@ -60,7 +60,7 @@ def _make_mock_session(program: str = "SAPMSYST", sbar_text: str = "", message_t
 
 @pytest.mark.skipif(sys.platform != "win32", reason="winreg only available on Windows")
 class TestDiscoverSaplogonPath:
-    """Tests for _discover_saplogon_path()."""
+    """Tests for discover_saplogon_path()."""
 
     def test_reads_path_from_registry(self):
         """Returns saplogon.exe path from the SAPsysdir registry value."""
@@ -74,7 +74,7 @@ class TestDiscoverSaplogonPath:
             patch.object(winreg, "OpenKey", return_value=mock_key) as mock_open,
             patch.object(winreg, "QueryValueEx", return_value=(r"D:\SAP\FrontEnd\SAPGUI", 1)),
         ):
-            result = _discover_saplogon_path()
+            result = discover_saplogon_path()
 
         assert result == r"D:\SAP\FrontEnd\SAPGUI\saplogon.exe"
         mock_open.assert_called_once_with(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\SAP\SAP Shared")
@@ -84,7 +84,7 @@ class TestDiscoverSaplogonPath:
         import winreg  # pylint: disable=import-outside-toplevel
 
         with patch.object(winreg, "OpenKey", side_effect=OSError("Key not found")):
-            result = _discover_saplogon_path()
+            result = discover_saplogon_path()
 
         assert result == _FALLBACK_SAPLOGON_PATH
 
@@ -92,7 +92,7 @@ class TestDiscoverSaplogonPath:
 class TestLogin:
     """Tests for login()."""
 
-    @patch("sapsucker.login._wait_for_session")
+    @patch("sapsucker.login.wait_for_session")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
     def test_happy_path(self, mock_time, mock_sap_gui_cls, mock_wait):
@@ -125,7 +125,7 @@ class TestLogin:
         mock_sap_gui_cls.connect.assert_called_once()
         session._fields["wnd[0]"].send_v_key.assert_called_once_with(0)
 
-    @patch("sapsucker.login._wait_for_session")
+    @patch("sapsucker.login.wait_for_session")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
     def test_handles_multiple_logon_popup(self, mock_time, mock_sap_gui_cls, mock_wait):
@@ -163,7 +163,7 @@ class TestLogin:
         # _handle_multiple_logon_popup after selecting OPT2.
         assert popup.send_v_key.call_count == 2
 
-    @patch("sapsucker.login._wait_for_session")
+    @patch("sapsucker.login.wait_for_session")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
     def test_raises_on_bad_credentials(self, mock_time, mock_sap_gui_cls, mock_wait):
@@ -181,7 +181,7 @@ class TestLogin:
                 password="wrong",
             )
 
-    @patch("sapsucker.login._wait_for_session")
+    @patch("sapsucker.login.wait_for_session")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
     def test_launches_sap_gui_when_connect_fails(self, mock_time, mock_sap_gui_cls, mock_wait):
@@ -301,10 +301,10 @@ class TestHandleMultipleLogonPopup:
 
 
 class TestWaitForSession:
-    """Tests for _wait_for_session()."""
+    """Tests for wait_for_session()."""
 
     def test_returns_first_session(self):
-        """_wait_for_session() returns the first child when it's a GuiSession."""
+        """wait_for_session() returns the first child when it's a GuiSession."""
         from sapsucker.components.session import GuiSession as GuiSessionCls
 
         conn = MagicMock()
@@ -313,13 +313,13 @@ class TestWaitForSession:
         conn.children.__len__ = lambda self: 1
         conn.children.__getitem__ = lambda self, i: mock_session
 
-        result = _wait_for_session(conn, timeout=2)
+        result = wait_for_session(conn, timeout=2)
         assert result is mock_session
 
     def test_raises_timeout(self):
-        """_wait_for_session() raises SapGuiTimeoutError when no session appears."""
+        """wait_for_session() raises SapGuiTimeoutError when no session appears."""
         conn = MagicMock()
         conn.children.__len__ = lambda self: 0
 
         with pytest.raises(SapGuiTimeoutError, match="No session available"):
-            _wait_for_session(conn, timeout=1)
+            wait_for_session(conn, timeout=1)
