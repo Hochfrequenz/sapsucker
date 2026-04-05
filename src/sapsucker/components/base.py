@@ -218,14 +218,42 @@ _BDT_PROBE_TYPES = [
 ]
 
 
+def _build_element_info(child: Any, children: list[ElementInfo] | None = None) -> ElementInfo:
+    """Build an ElementInfo from a COM object, reading all available properties."""
+    from sapsucker.models import ElementInfo
+
+    return ElementInfo(
+        id=str(_safe_com_attr(child, "Id", "")),
+        type=str(_safe_com_attr(child, "Type", "")),
+        type_as_number=int(_safe_com_attr(child, "TypeAsNumber", 0)),
+        name=str(_safe_com_attr(child, "Name", "")),
+        text=str(_safe_com_attr(child, "Text", "")),
+        changeable=bool(_safe_com_attr(child, "Changeable", False)),
+        tooltip=str(_safe_com_attr(child, "Tooltip", "")),
+        default_tooltip=str(_safe_com_attr(child, "DefaultTooltip", "")),
+        icon_name=str(_safe_com_attr(child, "IconName", "")),
+        modified=bool(_safe_com_attr(child, "Modified", False)),
+        acc_text=str(_safe_com_attr(child, "AccText", "")),
+        acc_tooltip=str(_safe_com_attr(child, "AccTooltip", "")),
+        acc_text_on_request=str(_safe_com_attr(child, "AccTextOnRequest", "")),
+        height=int(_safe_com_attr(child, "Height", 0)),
+        width=int(_safe_com_attr(child, "Width", 0)),
+        left=int(_safe_com_attr(child, "Left", 0)),
+        top=int(_safe_com_attr(child, "Top", 0)),
+        screen_left=int(_safe_com_attr(child, "ScreenLeft", 0)),
+        screen_top=int(_safe_com_attr(child, "ScreenTop", 0)),
+        is_symbol_font=bool(_safe_com_attr(child, "IsSymbolFont", False)),
+        container_type=bool(_safe_com_attr(child, "ContainerType", False)),
+        children=children if children is not None else [],
+    )
+
+
 def _probe_bdt_fields(com_obj: Any) -> list[ElementInfo]:
     """Discover fields on BDT containers via FindAllByNameEx wildcard.
 
     BDT-based screens (e.g. BP) don't expose children via the standard
     Children collection. Fields ARE accessible via FindAllByNameEx("*", type_num).
     """
-    from sapsucker.models import ElementInfo
-
     seen_ids: set[str] = set()
     result: list[ElementInfo] = []
     for type_num in _BDT_PROBE_TYPES:
@@ -237,17 +265,7 @@ def _probe_bdt_fields(com_obj: Any) -> list[ElementInfo]:
                 if child_id in seen_ids:
                     continue
                 seen_ids.add(child_id)
-                result.append(
-                    ElementInfo(
-                        id=child_id,
-                        type=str(_safe_com_attr(child, "Type", "")),
-                        type_as_number=int(_safe_com_attr(child, "TypeAsNumber", 0)),
-                        name=str(_safe_com_attr(child, "Name", "")),
-                        text=str(_safe_com_attr(child, "Text", "")),
-                        changeable=bool(_safe_com_attr(child, "Changeable", False)),
-                        children=[],
-                    )
-                )
+                result.append(_build_element_info(child))
         except Exception:
             pass
     return result
@@ -255,8 +273,6 @@ def _probe_bdt_fields(com_obj: Any) -> list[ElementInfo]:
 
 def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[ElementInfo]:
     """Recursively walk COM children and build a list of ElementInfo."""
-    from sapsucker.models import ElementInfo
-
     result: list[ElementInfo] = []
     try:
         children_com = com_obj.Children
@@ -270,20 +286,12 @@ def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[Eleme
                 child = children_com.Item(i)
             except Exception:
                 continue
-            child_info = ElementInfo(
-                id=str(_safe_com_attr(child, "Id", "")),
-                type=str(_safe_com_attr(child, "Type", "")),
-                type_as_number=int(_safe_com_attr(child, "TypeAsNumber", 0)),
-                name=str(_safe_com_attr(child, "Name", "")),
-                text=str(_safe_com_attr(child, "Text", "")),
-                changeable=bool(_safe_com_attr(child, "Changeable", False)),
-                children=(
-                    _dump_tree_recursive(child, depth + 1, max_depth)
-                    if depth + 1 < max_depth and _safe_com_attr(child, "ContainerType", False)
-                    else []
-                ),
+            child_children = (
+                _dump_tree_recursive(child, depth + 1, max_depth)
+                if depth + 1 < max_depth and _safe_com_attr(child, "ContainerType", False)
+                else []
             )
-            result.append(child_info)
+            result.append(_build_element_info(child, child_children))
     elif _safe_com_attr(com_obj, "ContainerType", False):
         # BDT fallback: probe for hidden fields when container has no standard children
         obj_id = str(_safe_com_attr(com_obj, "Id", ""))
@@ -296,16 +304,15 @@ def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[Eleme
 class GuiVContainer(GuiContainer, GuiVComponent):
     """Wraps the COM GuiVContainer interface — visual container with children and layout."""
 
-    def dump_tree(self, max_depth: int = 20) -> list[ElementInfo]:
+    def dump_tree(self, max_depth: int | None = None) -> list[ElementInfo]:
         """Return a recursive tree of ElementInfo for all children.
 
         Args:
-            max_depth: Maximum recursion depth (default 20).
-
-        Returns:
-            A list of ElementInfo representing the child tree.
+            max_depth: Maximum recursion depth. None means unlimited (with a
+                       hard safety cap of 200 to prevent infinite recursion).
         """
-        return _dump_tree_recursive(self._com, 0, max_depth)
+        effective_depth = max_depth if max_depth is not None else 200
+        return _dump_tree_recursive(self._com, 0, effective_depth)
 
     def find_by_name(self, name: str, type_name: str) -> GuiComponent | None:
         """Find the first child element matching name and type string. Returns None if not found."""

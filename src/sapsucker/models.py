@@ -32,3 +32,20 @@ class ElementInfo(BaseModel):
     text: str
     changeable: bool
     children: list[ElementInfo] = []
+
+    # Extended properties (all have safe defaults for backward compatibility)
+    tooltip: str = ""
+    default_tooltip: str = ""
+    icon_name: str = ""
+    modified: bool = False
+    acc_text: str = ""
+    acc_tooltip: str = ""
+    acc_text_on_request: str = ""
+    height: int = 0
+    width: int = 0
+    left: int = 0
+    top: int = 0
+    screen_left: int = 0
+    screen_top: int = 0
+    is_symbol_font: bool = False
+    container_type: bool = False
