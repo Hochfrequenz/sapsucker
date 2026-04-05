@@ -28,6 +28,13 @@ Example::
             pythoncom.CoUninitialize()
 
     text = asyncio.run(asyncio.to_thread(_read_status_bar))
+
+For heavy async workloads (e.g. multiple parallel callers), consider a dedicated
+COM worker thread with a queue, retry logic for transient COM errors, and
+adaptive throttling.  The ``ComThread`` class in ``sapwebgui.mcp`` is a
+production-grade reference implementation of this pattern.  If a second async
+consumer of sapsucker emerges, extracting the core bridge into
+``sapsucker.aio`` would be worth revisiting.
 """
 
 # pylint: disable=import-outside-toplevel,invalid-name
