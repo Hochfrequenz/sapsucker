@@ -218,8 +218,20 @@ _BDT_PROBE_TYPES = [
 ]
 
 
-def _build_element_info(child: Any, children: list[ElementInfo] | None = None) -> ElementInfo:
-    """Build an ElementInfo from a COM object, reading all available properties."""
+def _build_element_info(
+    child: Any,
+    children: list[ElementInfo] | None = None,
+    *,
+    container_type: bool | None = None,
+) -> ElementInfo:
+    """Build an ElementInfo from a COM object, reading all available properties.
+
+    Args:
+        child: COM object to read properties from.
+        children: Pre-built list of child ElementInfo objects.
+        container_type: If provided, skip the COM read for ContainerType (avoids
+            a redundant read when the caller already checked it for recursion).
+    """
     from sapsucker.models import ElementInfo
 
     return ElementInfo(
@@ -243,7 +255,9 @@ def _build_element_info(child: Any, children: list[ElementInfo] | None = None) -
         screen_left=int(_safe_com_attr(child, "ScreenLeft", 0)),
         screen_top=int(_safe_com_attr(child, "ScreenTop", 0)),
         is_symbol_font=bool(_safe_com_attr(child, "IsSymbolFont", False)),
-        container_type=bool(_safe_com_attr(child, "ContainerType", False)),
+        container_type=(
+            container_type if container_type is not None else bool(_safe_com_attr(child, "ContainerType", False))
+        ),
         children=children if children is not None else [],
     )
 
@@ -286,12 +300,11 @@ def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[Eleme
                 child = children_com.Item(i)
             except Exception:
                 continue
+            is_container = bool(_safe_com_attr(child, "ContainerType", False))
             child_children = (
-                _dump_tree_recursive(child, depth + 1, max_depth)
-                if depth + 1 < max_depth and _safe_com_attr(child, "ContainerType", False)
-                else []
+                _dump_tree_recursive(child, depth + 1, max_depth) if depth + 1 < max_depth and is_container else []
             )
-            result.append(_build_element_info(child, child_children))
+            result.append(_build_element_info(child, child_children, container_type=is_container))
     elif _safe_com_attr(com_obj, "ContainerType", False):
         # BDT fallback: probe for hidden fields when container has no standard children
         obj_id = str(_safe_com_attr(com_obj, "Id", ""))
