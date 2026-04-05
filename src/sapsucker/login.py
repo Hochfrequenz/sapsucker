@@ -38,10 +38,18 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from sapsucker.components.session import GuiSession
 
+__all__ = [
+    "cleanup_ghost_connections",
+    "discover_saplogon_path",
+    "login",
+    "logoff",
+    "wait_for_session",
+]
+
 _FALLBACK_SAPLOGON_PATH = r"C:\Program Files\SAP\FrontEnd\SAPGUI\saplogon.exe"
 
 
-def _discover_saplogon_path() -> str:
+def discover_saplogon_path() -> str:
     """Read the SAP GUI install dir from the Windows registry, fall back to the default path."""
     if sys.platform != "win32":
         return _FALLBACK_SAPLOGON_PATH
@@ -92,11 +100,11 @@ def login(
     try:
         app = SapGui.connect()
     except SapConnectionError:
-        app = SapGui.launch(exe_path=saplogon_exe_path or _discover_saplogon_path(), timeout=timeout)
+        app = SapGui.launch(exe_path=saplogon_exe_path or discover_saplogon_path(), timeout=timeout)
 
     # Step 2: Open connection
     conn = app.open_connection(connection_name, sync=True)
-    session = _wait_for_session(conn, timeout=timeout)
+    session = wait_for_session(conn, timeout=timeout)
 
     # Step 3: Dismiss any system message popups before the login screen
     _dismiss_system_message_popups(session)
@@ -183,8 +191,12 @@ def cleanup_ghost_connections() -> None:
         pass  # Don't fail on cleanup
 
 
-def _wait_for_session(conn: Any, timeout: int = 30) -> GuiSession:
-    """Poll until the connection has at least one session, then return it wrapped."""
+def wait_for_session(conn: Any, timeout: int = 30) -> GuiSession:
+    """Wait until the connection has at least one session, then return it wrapped.
+
+    Raises:
+        SapGuiTimeoutError: If no session appears within *timeout* seconds.
+    """
     from sapsucker.components.session import GuiSession as GuiSessionCls
 
     deadline = time.monotonic() + timeout
