@@ -370,3 +370,59 @@ class TestDumpTree:
         type(parent_com).Children = property(lambda self: (_ for _ in ()).throw(RuntimeError("no children")))
         result = _dump_tree_recursive(parent_com, 0, 10)
         assert result == []
+
+    def test_captures_tooltip_and_icon(self):
+        child = make_mock_com(
+            type_as_number=40,
+            type_name="GuiButton",
+            id="btn",
+            name="btn[0]",
+            text="",
+            tooltip="Weiter (Enter)",
+            icon_name="B_OKAY",
+            height=25,
+            width=80,
+            container_type=False,
+        )
+        parent = make_mock_com(container_type=True, children=[child])
+        vc = GuiVContainer(parent)
+        result = vc.dump_tree()
+        assert result[0].tooltip == "Weiter (Enter)"
+        assert result[0].icon_name == "B_OKAY"
+        assert result[0].height == 25
+        assert result[0].container_type is False
+
+    def test_safe_fallback_on_missing_property(self):
+        child = make_mock_com(
+            type_as_number=31,
+            type_name="GuiTextField",
+            id="txt",
+            name="txtF",
+            text="hello",
+            container_type=False,
+        )
+        del child.Tooltip
+        parent = make_mock_com(container_type=True, children=[child])
+        vc = GuiVContainer(parent)
+        result = vc.dump_tree()
+        assert result[0].tooltip == ""
+        assert result[0].text == "hello"
+
+    def test_unlimited_depth_default(self):
+        gc = make_mock_com(type_as_number=31, id="gc", name="gc", container_type=False)
+        child = make_mock_com(type_as_number=74, id="c", name="c", container_type=True, children=[gc])
+        parent = make_mock_com(container_type=True, children=[child])
+        vc = GuiVContainer(parent)
+        result = vc.dump_tree()  # No max_depth — should go full depth
+        assert len(result) == 1
+        assert len(result[0].children) == 1
+        assert result[0].children[0].id == "gc"
+
+    def test_explicit_max_depth_still_works(self):
+        gc = make_mock_com(type_as_number=31, id="gc", name="gc", container_type=False)
+        child = make_mock_com(type_as_number=74, id="c", name="c", container_type=True, children=[gc])
+        parent = make_mock_com(container_type=True, children=[child])
+        vc = GuiVContainer(parent)
+        result = vc.dump_tree(max_depth=1)
+        assert len(result) == 1
+        assert result[0].children == []
