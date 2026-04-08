@@ -209,29 +209,28 @@ class TestLogin:
         mock_sap_gui_cls.launch.assert_called_once()
 
 
-class TestLoginClosesExistingConnections:
-    """Regression coverage for issue #24.
+class TestLoginDoesNotCloseExistingConnections:
+    """Regression guard for the parallel-multi-mandant topology.
 
-    ``login()`` must close any pre-existing connection sharing the
-    requested description BEFORE calling ``app.open_connection``,
-    otherwise ``OpenConnection`` returns the existing connection by
-    description and the credential-fill block is skipped — the caller
-    ends up silently routed to the prior session's client/user.
+    sapsucker 0.5.0 made ``login()`` implicitly call
+    :func:`close_connections_named` before opening a new connection.
+    That broke the legitimate use case of being logged into one SAP
+    Logon entry as multiple distinct ``(client, user)`` tuples
+    concurrently — calling ``login()`` for the second tuple would have
+    closed the first. 0.5.1 reverted that. These tests pin down the
+    revert: ``login()`` must NOT touch any existing connection.
+    Consumers that genuinely want serial-switching are expected to call
+    ``close_connections_named()`` themselves before ``login()``.
     """
 
     @patch("sapsucker.login.wait_for_session")
     @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_close_runs_before_open_connection(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
-        """close_connections_named must be called before app.open_connection."""
+    def test_login_does_not_call_close_connections_named(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+        """login() must NOT auto-close existing connections — that would kill parallel logins."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="TESTUSER")
         mock_wait.return_value = session
-        app = mock_sap_gui_cls.connect.return_value
-        call_order: list[str] = []
-
-        mock_close.side_effect = lambda _app, _desc: call_order.append("close") or 0
-        app.open_connection.side_effect = lambda *a, **kw: call_order.append("open") or MagicMock()
 
         login(
             connection_name="HF S/4",
@@ -240,43 +239,17 @@ class TestLoginClosesExistingConnections:
             password="secret",
         )
 
-        assert call_order == ["close", "open"]
-        mock_close.assert_called_once_with(app, "HF S/4")
+        mock_close.assert_not_called()
 
     @patch("sapsucker.login.wait_for_session")
     @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_close_returning_zero_is_fine(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
-        """login() still proceeds normally when there are no matches to close."""
-        session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="TESTUSER")
-        mock_wait.return_value = session
-        mock_close.return_value = 0
-
-        result = login(
-            connection_name="FRESH",
-            client="100",
-            user="TESTUSER",
-            password="secret",
-        )
-
-        assert result is session
-
-    @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
-    @patch("sapsucker.SapGui")
-    @patch("sapsucker.login.time")
-    def test_close_is_called_after_launch_path(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
-        """close_connections_named also runs on the SAP-GUI-not-running launch path.
-
-        If SAP GUI was freshly launched there's nothing to close (returns 0),
-        but the *call* must still happen on the ``launch()``-returned app so
-        a subsequent reconnection attempt by the same consumer is consistent.
-        """
+    def test_login_does_not_call_close_on_launch_path_either(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+        """Same guard for the SAP-GUI-not-running cold-start path."""
         mock_sap_gui_cls.connect.side_effect = SapConnectionError("Not running")
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="TESTUSER")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         login(
             connection_name="HF S/4",
@@ -285,11 +258,7 @@ class TestLoginClosesExistingConnections:
             password="secret",
         )
 
-        mock_close.assert_called_once()
-        # Called with the launched app, not the (failed) connect app
-        args, _ = mock_close.call_args
-        assert args[0] is mock_sap_gui_cls.launch.return_value
-        assert args[1] == "HF S/4"
+        mock_close.assert_not_called()
 
 
 class TestLoginVerifiesClientAndUser:
@@ -301,14 +270,12 @@ class TestLoginVerifiesClientAndUser:
     """
 
     @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_client_match_succeeds(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+    def test_client_match_succeeds(self, mock_time, mock_sap_gui_cls, mock_wait):
         """Happy path: actual client matches requested → session returned."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="210", user="MUSTERFRAUM")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         result = login(
             connection_name="HF S/4",
@@ -320,14 +287,12 @@ class TestLoginVerifiesClientAndUser:
         assert result is session
 
     @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_client_mismatch_raises(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+    def test_client_mismatch_raises(self, mock_time, mock_sap_gui_cls, mock_wait):
         """If the new session lands in the wrong client, raise SapConnectionError."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="MUSTERFRAUM")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         with pytest.raises(SapConnectionError, match="Login landed in client '100' but '210' was requested"):
             login(
@@ -338,14 +303,12 @@ class TestLoginVerifiesClientAndUser:
             )
 
     @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_user_mismatch_raises(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+    def test_user_mismatch_raises(self, mock_time, mock_sap_gui_cls, mock_wait):
         """If the new session lands as the wrong user, raise SapConnectionError."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="MUSTERMANNM")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         with pytest.raises(
             SapConnectionError, match="Login landed as user 'MUSTERMANNM' but 'MUSTERFRAUM' was requested"
@@ -358,14 +321,12 @@ class TestLoginVerifiesClientAndUser:
             )
 
     @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_user_comparison_is_case_insensitive(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+    def test_user_comparison_is_case_insensitive(self, mock_time, mock_sap_gui_cls, mock_wait):
         """SAP is case-insensitive about usernames — 'mustermannm' matches 'MUSTERMANNM'."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="MUSTERMANNM")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         # Lower-case request should succeed against upper-case server response
         result = login(
