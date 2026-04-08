@@ -73,10 +73,20 @@ def login(
     saplogon_exe_path: str | None = None,
     timeout: int = 30,
 ) -> GuiSession:
-    """Connect to SAP GUI, open a connection, fill the login screen, return a session.
+    """Connect to SAP GUI, open a NEW connection, fill the login screen, return a session.
 
     Launches SAP Logon if not already running. Handles the "multiple logon" popup
     by selecting "continue without ending other sessions" (OPT2).
+
+    Each call to ``login()`` opens a fresh ``con[N]`` via
+    ``app.open_connection`` and **does not affect any existing connection
+    that already shares the same ``connection_name``**. This makes it
+    legal to be logged into the same SAP Logon entry as multiple
+    distinct ``(client, user)`` tuples concurrently — for example one
+    background sub-agent in client 100 and another in client 210, both
+    via "HF S/4". If you instead want serial-switching semantics
+    (close any prior matching connection first), call
+    :func:`close_connections_named` explicitly before ``login()``.
 
     Args:
         connection_name: SAP Logon entry name (e.g. "HF S/4").
@@ -108,16 +118,15 @@ def login(
     except SapConnectionError:
         app = SapGui.launch(exe_path=saplogon_exe_path or discover_saplogon_path(), timeout=timeout)
 
-    # Step 2a: Close any pre-existing connection sharing this description.
-    # ``OpenConnection(description)`` in SAP GUI Scripting returns an
-    # already-open connection by description rather than creating a fresh
-    # one; that would leave us with the prior session (wrong client/user)
-    # and the ``program == SAPMSYST`` guard below would skip the credential
-    # fill block entirely, silently misrouting the caller. Closing matches
-    # up-front forces a fresh SAPMSYST login dynpro — see issue #24.
-    close_connections_named(app, connection_name)
-
-    # Step 2b: Open connection
+    # Step 2: Open a new connection. ``app.open_connection(description)``
+    # adds a new ``con[N]`` to the COM tree without affecting any existing
+    # connection that shares the same description — multiple parallel
+    # connections to the same SAP Logon entry (e.g. one per mandant or
+    # one per user) are a supported topology and the caller may rely on it.
+    # If you genuinely want serial-switching semantics (close any prior
+    # connection of the same name first), call :func:`close_connections_named`
+    # explicitly before ``login()`` — see issue #24 history for the
+    # rationale behind keeping that behaviour opt-in.
     conn = app.open_connection(connection_name, sync=True)
     session = wait_for_session(conn, timeout=timeout)
 
@@ -149,14 +158,12 @@ def login(
     if sbar is not None and cast(Any, sbar).message_type == "E":
         raise SapConnectionError(f"Login failed: {cast(Any, sbar).text}")
 
-    # Step 7: Verify we actually landed where we asked to. The Step 2a
-    # close-existing path handles the shared-``connection_name`` COM
-    # dedup case, but other routes to a wrong-client session exist —
-    # notably SSO/SNC or a cached logon ticket that auto-authenticates
-    # before we reach the SAPMSYST dynpro, causing the credential-fill
-    # block to be skipped entirely. In any such case we'd rather raise
-    # loudly here than hand back a session silently logged in as the
-    # wrong user or in the wrong client — see issue #24.
+    # Step 7: Verify we actually landed where we asked to. If the
+    # SAPMSYST credential-fill block was skipped (e.g. because SSO/SNC
+    # or a cached logon ticket auto-authenticated before we reached the
+    # login dynpro, or because some other path bypassed it) we'd rather
+    # raise loudly here than hand back a session silently logged in as
+    # the wrong user or in the wrong client — see issue #24.
     actual_client = str(session.info.client)
     if actual_client != client:
         raise SapConnectionError(
@@ -201,14 +208,19 @@ def logoff(session: GuiSession) -> None:
 def close_connections_named(app: Any, description: str) -> int:
     """Close every open connection whose ``Description`` matches *description*.
 
-    Used by :func:`login` to force ``OpenConnection`` to create a fresh
-    connection rather than return an already-open one by name — see
-    issue #24. Safe to call directly from consumer code that needs the
-    same behaviour (e.g. to pre-clean before opening a second mandant
-    on the same SAP Logon entry).
+    Opt-in helper for consumers that want **serial-switching** semantics
+    on a SAP Logon entry: call this *before* :func:`login` to drop any
+    prior connection of the same name so the upcoming ``login()`` is the
+    only one. ``login()`` itself does **not** call this — it opens a new
+    parallel connection without affecting existing ones, because the
+    parallel-multi-mandant topology (one SAP Logon entry, multiple
+    concurrent ``(client, user)`` logins) is a supported and common
+    arrangement we don't want to break by default. See issue #24 for
+    history.
 
     Returns the number of connections actually closed. If SAP GUI is
-    not running, returns 0 without raising.
+    not running (or ``app.com.Children`` is not accessible for any other
+    reason), returns 0 without raising.
 
     Uses reverse iteration over ``app.com.Children`` because the COM
     ``GuiConnectionCollection`` mutates on close — the same reverse
