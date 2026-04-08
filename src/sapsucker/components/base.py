@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from sapsucker._errors import ElementNotFoundError
@@ -285,6 +286,50 @@ def _probe_bdt_fields(com_obj: Any) -> list[ElementInfo]:
     return result
 
 
+def _count_tree_elements(tree: list[ElementInfo]) -> int:
+    """Count total elements in a returned tree (root + all descendants).
+
+    Used by ``GuiVContainer.dump_tree`` to report the size of the dumped
+    tree in its perf log line. Pure-Python iteration over the already-built
+    ``ElementInfo`` list — no extra COM calls. Microseconds even for trees
+    with hundreds of elements.
+
+    Iterative (explicit stack) instead of recursive so the function is
+    immune to Python's recursion limit even if ``dump_tree``'s 200-level
+    safety cap is ever raised.
+    """
+    total = 0
+    stack: list[ElementInfo] = list(tree)
+    while stack:
+        elem = stack.pop()
+        total += 1
+        if elem.children:
+            stack.extend(elem.children)
+    return total
+
+
+def _measure_tree_depth(tree: list[ElementInfo]) -> int:
+    """Return the maximum depth of an already-built tree (1-indexed; 0 if empty).
+
+    Used by ``GuiVContainer.dump_tree`` to report the actual depth reached
+    in its perf log line — which may be less than the requested ``max_depth``
+    if the tree is shallower, or equal if the cap was hit.
+
+    Iterative (explicit stack) instead of recursive so the function is
+    immune to Python's recursion limit even if ``dump_tree``'s 200-level
+    safety cap is ever raised. Each stack entry carries its own depth so
+    the running max can be computed in a single pass.
+    """
+    max_depth = 0
+    stack: list[tuple[ElementInfo, int]] = [(elem, 1) for elem in tree]
+    while stack:
+        elem, depth = stack.pop()
+        max_depth = max(max_depth, depth)
+        if elem.children:
+            stack.extend((child, depth + 1) for child in elem.children)
+    return max_depth
+
+
 def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[ElementInfo]:
     """Recursively walk COM children and build a list of ElementInfo."""
     result: list[ElementInfo] = []
@@ -323,9 +368,40 @@ class GuiVContainer(GuiContainer, GuiVComponent):
         Args:
             max_depth: Maximum recursion depth. None means unlimited (with a
                        hard safety cap of 200 to prevent infinite recursion).
+
+        Emits one INFO log line per call (``event=dump_tree``) with the
+        wall-clock duration, the number of elements in the returned tree,
+        the actual depth reached, the requested ``max_depth`` (or ``None``
+        if unbounded), and the container's COM ID. Used by downstream
+        consumers (e.g. sapwebgui.mcp) to correlate slow tool calls with
+        the cost of building the tree. The instrumentation overhead is
+        microseconds — pure-Python iteration over the already-built
+        ``ElementInfo`` list, no extra COM calls.
         """
-        effective_depth = max_depth if max_depth is not None else 200
-        return _dump_tree_recursive(self._com, 0, effective_depth)
+        effective_depth_cap = max_depth if max_depth is not None else 200
+        start = time.perf_counter()
+        result = _dump_tree_recursive(self._com, 0, effective_depth_cap)
+        duration_ms = int((time.perf_counter() - start) * 1000)
+
+        # Defensive: never let perf logging break the actual call. The COM
+        # ID read can fail if the proxy went stale mid-dump; treat that as
+        # an "unknown" container rather than raising.
+        try:
+            container_id = str(self._com.Id)
+        except Exception:
+            container_id = "<unknown>"
+
+        logger.info(
+            "dump_tree",
+            extra={
+                "duration_ms": duration_ms,
+                "elements": _count_tree_elements(result),
+                "depth_reached": _measure_tree_depth(result),
+                "max_depth_param": max_depth,
+                "container_id": container_id,
+            },
+        )
+        return result
 
     def find_by_name(self, name: str, type_name: str) -> GuiComponent | None:
         """Find the first child element matching name and type string. Returns None if not found."""
