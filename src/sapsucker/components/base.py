@@ -290,15 +290,21 @@ def _count_tree_elements(tree: list[ElementInfo]) -> int:
     """Count total elements in a returned tree (root + all descendants).
 
     Used by ``GuiVContainer.dump_tree`` to report the size of the dumped
-    tree in its perf log line. Pure-Python recursive walk over the
-    already-built ``ElementInfo`` list — no extra COM calls. Microseconds
-    even for trees with hundreds of elements.
+    tree in its perf log line. Pure-Python iteration over the already-built
+    ``ElementInfo`` list — no extra COM calls. Microseconds even for trees
+    with hundreds of elements.
+
+    Iterative (explicit stack) instead of recursive so the function is
+    immune to Python's recursion limit even if ``dump_tree``'s 200-level
+    safety cap is ever raised.
     """
     total = 0
-    for elem in tree:
+    stack: list[ElementInfo] = list(tree)
+    while stack:
+        elem = stack.pop()
         total += 1
         if elem.children:
-            total += _count_tree_elements(elem.children)
+            stack.extend(elem.children)
     return total
 
 
@@ -308,14 +314,20 @@ def _measure_tree_depth(tree: list[ElementInfo]) -> int:
     Used by ``GuiVContainer.dump_tree`` to report the actual depth reached
     in its perf log line — which may be less than the requested ``max_depth``
     if the tree is shallower, or equal if the cap was hit.
+
+    Iterative (explicit stack) instead of recursive so the function is
+    immune to Python's recursion limit even if ``dump_tree``'s 200-level
+    safety cap is ever raised. Each stack entry carries its own depth so
+    the running max can be computed in a single pass.
     """
-    if not tree:
-        return 0
-    max_child = 0
-    for elem in tree:
+    max_depth = 0
+    stack: list[tuple[ElementInfo, int]] = [(elem, 1) for elem in tree]
+    while stack:
+        elem, depth = stack.pop()
+        max_depth = max(max_depth, depth)
         if elem.children:
-            max_child = max(max_child, _measure_tree_depth(elem.children))
-    return 1 + max_child
+            stack.extend((child, depth + 1) for child in elem.children)
+    return max_depth
 
 
 def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[ElementInfo]:
@@ -366,9 +378,9 @@ class GuiVContainer(GuiContainer, GuiVComponent):
         microseconds — pure-Python iteration over the already-built
         ``ElementInfo`` list, no extra COM calls.
         """
-        effective_depth_param = max_depth if max_depth is not None else 200
+        effective_depth_cap = max_depth if max_depth is not None else 200
         start = time.perf_counter()
-        result = _dump_tree_recursive(self._com, 0, effective_depth_param)
+        result = _dump_tree_recursive(self._com, 0, effective_depth_cap)
         duration_ms = int((time.perf_counter() - start) * 1000)
 
         # Defensive: never let perf logging break the actual call. The COM
@@ -384,7 +396,7 @@ class GuiVContainer(GuiContainer, GuiVComponent):
             extra={
                 "duration_ms": duration_ms,
                 "elements": _count_tree_elements(result),
-                "effective_depth": _measure_tree_depth(result),
+                "depth_reached": _measure_tree_depth(result),
                 "max_depth_param": max_depth,
                 "container_id": container_id,
             },

@@ -1,5 +1,6 @@
 """Tests for base component classes."""
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -437,8 +438,6 @@ class TestDumpTreePerfLogging:
     """
 
     def test_dump_tree_logs_event_with_required_fields(self, caplog):
-        import logging
-
         child1 = make_mock_com(type_as_number=31, id="c1", name="txtA", container_type=False)
         child2 = make_mock_com(type_as_number=40, id="c2", name="btnOK", container_type=False)
         parent = make_mock_com(
@@ -456,18 +455,17 @@ class TestDumpTreePerfLogging:
 
         rec = records[0]
         # Required fields — pinned for downstream log-correlation tooling.
-        assert hasattr(rec, "duration_ms"), "missing duration_ms"
+        # Direct attribute access (not getattr) is the readable form; the
+        # field names are the contract that downstream consumers depend on.
         assert isinstance(rec.duration_ms, int)
         assert rec.duration_ms >= 0
-        assert getattr(rec, "elements") == 2  # noqa: B009 — explicit attribute access for the test
-        assert getattr(rec, "effective_depth") == 1  # noqa: B009
-        assert getattr(rec, "max_depth_param") is None  # noqa: B009 — None == unlimited
-        assert getattr(rec, "container_id") == "/app/con[0]/ses[0]/wnd[0]/usr"  # noqa: B009
+        assert rec.elements == 2
+        assert rec.depth_reached == 1
+        assert rec.max_depth_param is None  # None == unlimited
+        assert rec.container_id == "/app/con[0]/ses[0]/wnd[0]/usr"
 
     def test_dump_tree_log_counts_nested_elements(self, caplog):
         """elements field reports the TOTAL count, including grandchildren."""
-        import logging
-
         gc = make_mock_com(type_as_number=31, id="gc", name="gc", container_type=False)
         child = make_mock_com(type_as_number=74, id="c", name="c", container_type=True, children=[gc])
         parent = make_mock_com(container_type=True, id="root", children=[child])
@@ -478,12 +476,10 @@ class TestDumpTreePerfLogging:
 
         rec = next(r for r in caplog.records if r.message == "dump_tree")
         assert rec.elements == 2  # child + grandchild
-        assert rec.effective_depth == 2  # 2 levels deep
+        assert rec.depth_reached == 2  # 2 levels deep
 
     def test_dump_tree_log_max_depth_param_passes_through(self, caplog):
         """When the caller passes max_depth, it shows up in the log line."""
-        import logging
-
         parent = make_mock_com(container_type=True, id="root", children=[])
         vc = GuiVContainer(parent)
 
@@ -500,8 +496,6 @@ class TestDumpTreePerfLogging:
         post-dump Id read for logging failed. The log line still emits with
         ``container_id="<unknown>"`` instead of breaking the call.
         """
-        import logging
-
         parent = make_mock_com(container_type=True, id="root", children=[])
         # Replace the Id property with one that raises after the dump completes.
         type(parent).Id = property(lambda self: (_ for _ in ()).throw(RuntimeError("dead proxy")))
