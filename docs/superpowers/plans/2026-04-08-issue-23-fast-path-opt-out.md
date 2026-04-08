@@ -41,7 +41,34 @@ cd C:/github/sapsucker && tox -e tests -- unittests/test_get_object_tree.py unit
 
 Expected: all tests pass. If any fail BEFORE we touch anything, stop and report — the plan assumes a green starting state.
 
-- [ ] **Step 1.2: Add the helper function to `base.py`**
+- [ ] **Step 1.2a: Add `import os` to `base.py`**
+
+The current `base.py` does NOT import `os`. The new helper needs `os.environ`, so we must add the import first.
+
+Edit `src/sapsucker/components/base.py` and locate the existing import block at the top of the file:
+
+```python
+from __future__ import annotations
+
+import logging
+import time
+from typing import TYPE_CHECKING, Any
+```
+
+Add `import os` between `import logging` and `import time` (alphabetical order):
+
+```python
+from __future__ import annotations
+
+import logging
+import os
+import time
+from typing import TYPE_CHECKING, Any
+```
+
+This is a tiny additive change. No other imports need touching.
+
+- [ ] **Step 1.2b: Add the helper function to `base.py`**
 
 Insert this block at `src/sapsucker/components/base.py`, immediately above the existing `_SESSION_TYPE_NAME = "GuiSession"` line (currently line 333):
 
@@ -66,8 +93,6 @@ def _read_fast_path_disabled_from_env() -> bool:
     raw = os.environ.get(_SAPSUCKER_DISABLE_FAST_PATH_ENV, "")
     return raw.strip().lower() in _FAST_PATH_DISABLE_TRUTHY_VALUES
 ```
-
-Verify `import os` is already at the top of the file. (It should be — sapsucker uses os elsewhere. Grep to confirm: `grep -n "^import os" src/sapsucker/components/base.py`.) If it's not present, add `import os` to the top alongside the existing imports.
 
 - [ ] **Step 1.3: Write the unit test for the helper**
 
@@ -234,7 +259,13 @@ class TestDumpTreeFastPathOptOut:
     # ----- Env-var-driven default -----
 
     def test_env_var_unset_keeps_fast_path_enabled(self, caplog, monkeypatch):
-        """Spec test #1: with the env var unset, the fast path runs."""
+        """Spec test #1: with the env var unset, the fast path runs.
+
+        ALSO covers DoD #4 (log line format preserved) by asserting that
+        all six expected fields are present on the log record. The other
+        tests in this class only assert on `path` to keep them focused;
+        this one is the canonical regression check for the log format.
+        """
         monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
         _base_module._reset_fast_path_cache()
 
@@ -247,6 +278,11 @@ class TestDumpTreeFastPathOptOut:
         session_mock.GetObjectTree.assert_called_once()
         rec = next(r for r in caplog.records if r.message == "dump_tree")
         assert rec.path == "fast"
+
+        # DoD #4: the log line format is preserved across this fix.
+        # Every existing field must still be present; no new fields, no removals.
+        for required_field in ("duration_ms", "elements", "depth_reached", "max_depth_param", "container_id", "path"):
+            assert hasattr(rec, required_field), f"log record missing {required_field}"
 
     def test_env_var_set_to_1_disables_fast_path(self, caplog, monkeypatch):
         """Spec test #2: env var = "1" forces the slow path globally."""
@@ -524,7 +560,7 @@ to:
     ) -> list[ElementInfo]:
 ```
 
-In the same method body, replace the existing fast-path-decision block. The current block (around lines 542–568) reads:
+In the same method body, replace the existing fast-path-decision block. The current block (lines 542–568, **verbatim from base.py**) reads:
 
 ```python
         # Fast path: bulk-read via GuiSession.GetObjectTree.
@@ -541,6 +577,10 @@ In the same method body, replace the existing fast-path-decision block. The curr
                 path = "fast"
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 if _is_permanent_fast_path_failure(exc):
+                    # Cache the verdict so subsequent calls skip the doomed
+                    # attempt. Log at WARNING (not DEBUG) once on the
+                    # transition because it's a meaningful environment
+                    # discovery, not just a routine fallback.
                     _fast_path_permanently_disabled = True
                     logger.warning(
                         "dump_tree_fast_path_permanently_disabled",
@@ -551,6 +591,8 @@ In the same method body, replace the existing fast-path-decision block. The curr
                 result = _dump_tree_recursive(self._com, 0, effective_depth_cap)
                 path = "slow"
 ```
+
+**Critical:** the four-line comment `# Cache the verdict so subsequent calls skip the doomed attempt. ...` between `if _is_permanent_fast_path_failure(exc):` and `_fast_path_permanently_disabled = True` MUST be present in the `old_string` of your Edit call, exactly as shown above. The previous version of this plan omitted that comment and the Edit would have failed on string mismatch. If you copy this block verbatim into Edit, it will match.
 
 Replace with:
 
@@ -583,6 +625,10 @@ Replace with:
                 path = "fast"
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 if _is_permanent_fast_path_failure(exc):
+                    # Cache the verdict so subsequent calls skip the doomed
+                    # attempt. Log at WARNING (not DEBUG) once on the
+                    # transition because it's a meaningful environment
+                    # discovery, not just a routine fallback.
                     _fast_path_permanently_disabled = True
                     logger.warning(
                         "dump_tree_fast_path_permanently_disabled",
@@ -835,6 +881,20 @@ If the suite still crashes natively at the same test with the env var set, STOP.
 
 - [ ] **Step 4.6: Revert the temporary `tox.ini` edit**
 
+**Safety check first.** If `git diff tox.ini` shows changes OTHER than the env-var line we added in Step 4.3, stash the unrelated changes first so the revert doesn't nuke them:
+
+```bash
+cd C:/github/sapwebgui.mcp && git diff tox.ini
+```
+
+If you see unrelated edits in the diff, run:
+
+```bash
+cd C:/github/sapwebgui.mcp && git stash push -m "unrelated tox.ini edits during sapsucker#23 manual SAP test" tox.ini
+```
+
+Then revert:
+
 ```bash
 cd C:/github/sapwebgui.mcp && git checkout tox.ini
 ```
@@ -845,7 +905,7 @@ Verify nothing is staged from the temporary edit:
 cd C:/github/sapwebgui.mcp && git status
 ```
 
-The `tox.ini` file should be back to its committed state.
+The `tox.ini` file should be back to its committed state. If you stashed earlier, you can `git stash pop` to restore the unrelated edits — but only AFTER the manual SAP test is fully done so they don't confuse a future revert.
 
 - [ ] **Step 4.7: Note the result for the PR body**
 
