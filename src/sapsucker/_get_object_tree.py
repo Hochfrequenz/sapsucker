@@ -146,7 +146,20 @@ class GetObjectTreeProperties(BaseModel):
     screen_left: int = Field(default=0, alias="ScreenLeft")
     screen_top: int = Field(default=0, alias="ScreenTop")
     is_symbol_font: SapBool = Field(default=False, alias="IsSymbolFont")
-    container_type: SapBool = Field(default=False, alias="ContainerType")
+    # NOTE: container_type is intentionally a STRICT bool, not SapBool. The
+    # other three bool fields above (changeable, modified, is_symbol_font)
+    # have empirically observed empty-string cases on real SAP elements
+    # (verified against unittests/fixtures/get_object_tree_bp_create_full.json:
+    # 277 elements, 3 of 4 bool fields contain ""). ContainerType, however,
+    # is ALWAYS populated as either "true" or "false" — no empty string ever
+    # observed. Treating it strict means: if SAP ever returns "" for
+    # ContainerType on some other screen, the parser raises ValidationError
+    # and dump_tree falls back to the per-property slow path. This is
+    # MORE protective than silently mapping "" → False, because container_type
+    # drives recursion (an element being misclassified as non-container would
+    # silently drop its entire subtree). Surface the divergence loudly via
+    # the fallback rather than mask it. Reviewer recommendation on PR #22.
+    container_type: bool = Field(default=False, alias="ContainerType")
 
 
 class GetObjectTreeNode(BaseModel):
@@ -194,6 +207,16 @@ def parse_get_object_tree_json(raw: str, max_depth: int) -> list[ElementInfo]:
             up to this many levels; deeper children are dropped to
             match the per-property path's truncation behaviour.
 
+    Raises:
+        ValueError: If the JSON has more than one top-level child. SAP's
+            documented contract returns exactly one top-level entry (the
+            queried element); a violation indicates either a SAP version
+            change or an unexpected response shape. Raising forces
+            ``GuiVContainer.dump_tree`` to fall back to the per-property
+            slow path rather than silently dropping the extra entries.
+        pydantic.ValidationError: If the JSON cannot be validated against
+            :class:`GetObjectTreeResponse`.
+
     Returns:
         A list of :class:`ElementInfo`. Empty when:
 
@@ -205,6 +228,18 @@ def parse_get_object_tree_json(raw: str, max_depth: int) -> list[ElementInfo]:
     response = GetObjectTreeResponse.model_validate_json(raw)
     if not response.children:
         return []
+    # SAP's documented contract: exactly one top-level entry (the queried
+    # element wrapping its descendants). If we ever see more, the parser
+    # is operating against an undocumented response shape — raise so
+    # dump_tree falls back to the slow path instead of silently dropping
+    # the extra entries. Reviewer recommendation on PR #22.
+    if len(response.children) != 1:
+        raise ValueError(
+            f"GetObjectTree returned {len(response.children)} top-level children; "
+            f"expected exactly 1 (the queried element). The parser does not know "
+            f"how to merge multiple top-level wrappers — falling back to per-property "
+            f"COM reads to avoid silently dropping data."
+        )
     # The queried element is response.children[0]; its descendants are
     # what the existing dump_tree contract returns to callers.
     queried_element = response.children[0]

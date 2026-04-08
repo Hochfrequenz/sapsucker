@@ -132,6 +132,62 @@ class TestGetObjectTreeProperties:
         props = GetObjectTreeProperties.model_validate({"Id": "x", "UnknownNewSapProperty": "whatever"})
         assert props.id == "x"
 
+    def test_missing_keys_use_defaults_all_21_fields(self):
+        """Reviewer M5: extend the defaults test to cover ALL 21 fields, not just 5.
+
+        A future refactor that drops a default for any field would be caught
+        by this test. Constructs the model from a single-key dict and asserts
+        every other field has the documented default.
+        """
+        props = GetObjectTreeProperties.model_validate({"Id": "only-this-one"})
+        assert props.id == "only-this-one"
+        # 4 strings (other than id):
+        assert props.type == ""
+        assert props.name == ""
+        assert props.text == ""
+        # 7 ints (after the 4 strings already covered above):
+        assert props.type_as_number == 0
+        assert props.height == 0
+        assert props.width == 0
+        assert props.left == 0
+        assert props.top == 0
+        assert props.screen_left == 0
+        assert props.screen_top == 0
+        # 4 SapBool fields:
+        assert props.changeable is False
+        assert props.modified is False
+        assert props.is_symbol_font is False
+        # 1 strict bool field (container_type, locked down per reviewer I3):
+        assert props.container_type is False
+        # 6 more strings:
+        assert props.tooltip == ""
+        assert props.default_tooltip == ""
+        assert props.icon_name == ""
+        assert props.acc_text == ""
+        assert props.acc_tooltip == ""
+        assert props.acc_text_on_request == ""
+
+    def test_container_type_is_strict_bool_rejects_empty_string(self):
+        """Reviewer I3: container_type must reject "" (which would silently
+        misclassify a container as non-container, dropping its entire subtree).
+
+        The other three bool fields tolerate "" via SapBool because real SAP
+        does emit "" for them on element types where the property doesn't
+        apply (verified empirically against the BP fixture). ContainerType
+        is never observed empty — strict bool surfaces any future divergence
+        loudly via fallback to slow path instead of silently producing
+        wrong results.
+        """
+        with pytest.raises(Exception):  # noqa: PT011 — pydantic ValidationError or pydantic_core.ValidationError
+            GetObjectTreeProperties.model_validate({"ContainerType": ""})
+
+    def test_container_type_strict_bool_accepts_true_false(self):
+        """ContainerType still works for the documented values."""
+        true_case = GetObjectTreeProperties.model_validate({"ContainerType": "true"})
+        false_case = GetObjectTreeProperties.model_validate({"ContainerType": "false"})
+        assert true_case.container_type is True
+        assert false_case.container_type is False
+
 
 # ---------------------------------------------------------------------------
 # parse_get_object_tree_json — against synthetic JSON
@@ -158,6 +214,23 @@ class TestParseGetObjectTreeJsonSynthetic:
         # Returns CHILDREN OF the queried element, not the element itself.
         # An element with no children -> empty list.
         assert result == []
+
+    def test_multi_top_level_children_raises(self):
+        """Reviewer I2: SAP's documented contract returns exactly one
+        top-level wrapper. If GetObjectTree ever returns more than one,
+        the parser must NOT silently drop entries — it must raise so
+        dump_tree falls back to the per-property slow path.
+        """
+        raw = json.dumps(
+            {
+                "children": [
+                    {"properties": {"Id": "first"}, "children": []},
+                    {"properties": {"Id": "second"}, "children": []},
+                ]
+            }
+        )
+        with pytest.raises(ValueError, match="top-level"):
+            parse_get_object_tree_json(raw, max_depth=200)
 
     def test_two_top_level_children_returned(self):
         raw = json.dumps(
@@ -506,15 +579,21 @@ class TestDumpTreeFastPath:
         assert rec.elements == 1
 
     def test_falls_back_when_session_cannot_be_resolved(self, caplog):
-        """No GuiSession reachable -> falls back to per-property path."""
+        """No GuiSession reachable -> falls back to per-property path.
+
+        ``make_mock_com`` defaults ``Parent`` to ``None``, so
+        ``_find_session_com``'s Parent walk terminates immediately
+        without finding a ``Type == "GuiSession"`` element. The fast
+        path raises "could not locate GuiSession" → fallback fires.
+        """
         child = make_mock_com(type_as_number=31, id="c1", name="txtA")
         parent = make_mock_com(
             container_type=True,
             id="/app/con[0]/ses[0]/wnd[0]/usr",
             children=[child],
         )
-        # FindById always raises -> _find_session_com returns None
-        parent.FindById = MagicMock(side_effect=RuntimeError("no session"))
+        # parent.Parent is None by default in make_mock_com — that alone
+        # makes _find_session_com return None.
         vc = GuiVContainer(parent)
 
         with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
