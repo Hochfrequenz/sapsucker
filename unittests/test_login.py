@@ -270,14 +270,12 @@ class TestLoginVerifiesClientAndUser:
     """
 
     @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_client_match_succeeds(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+    def test_client_match_succeeds(self, mock_time, mock_sap_gui_cls, mock_wait):
         """Happy path: actual client matches requested → session returned."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="210", user="MUSTERFRAUM")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         result = login(
             connection_name="HF S/4",
@@ -289,14 +287,12 @@ class TestLoginVerifiesClientAndUser:
         assert result is session
 
     @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_client_mismatch_raises(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+    def test_client_mismatch_raises(self, mock_time, mock_sap_gui_cls, mock_wait):
         """If the new session lands in the wrong client, raise SapConnectionError."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="MUSTERFRAUM")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         with pytest.raises(SapConnectionError, match="Login landed in client '100' but '210' was requested"):
             login(
@@ -307,14 +303,12 @@ class TestLoginVerifiesClientAndUser:
             )
 
     @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_user_mismatch_raises(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+    def test_user_mismatch_raises(self, mock_time, mock_sap_gui_cls, mock_wait):
         """If the new session lands as the wrong user, raise SapConnectionError."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="MUSTERMANNM")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         with pytest.raises(
             SapConnectionError, match="Login landed as user 'MUSTERMANNM' but 'MUSTERFRAUM' was requested"
@@ -327,14 +321,12 @@ class TestLoginVerifiesClientAndUser:
             )
 
     @patch("sapsucker.login.wait_for_session")
-    @patch("sapsucker.login.close_connections_named")
     @patch("sapsucker.SapGui")
     @patch("sapsucker.login.time")
-    def test_user_comparison_is_case_insensitive(self, mock_time, mock_sap_gui_cls, mock_close, mock_wait):
+    def test_user_comparison_is_case_insensitive(self, mock_time, mock_sap_gui_cls, mock_wait):
         """SAP is case-insensitive about usernames — 'mustermannm' matches 'MUSTERMANNM'."""
         session = _make_mock_session(program="SAPLSMTR_NAVIGATION", client="100", user="MUSTERMANNM")
         mock_wait.return_value = session
-        mock_close.return_value = 0
 
         # Lower-case request should succeed against upper-case server response
         result = login(

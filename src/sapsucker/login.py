@@ -88,6 +88,13 @@ def login(
     (close any prior matching connection first), call
     :func:`close_connections_named` explicitly before ``login()``.
 
+    .. note::
+       sapsucker 0.5.0 briefly called ``close_connections_named``
+       implicitly here, which broke the parallel-multi-mandant topology
+       described above. That was reverted in 0.5.1. If you upgraded
+       from 0.5.0 expecting ``login()`` to clean up after itself, you
+       now need to call :func:`close_connections_named` yourself.
+
     Args:
         connection_name: SAP Logon entry name (e.g. "HF S/4").
         client: SAP client/mandant (e.g. "100").
@@ -217,6 +224,13 @@ def close_connections_named(app: Any, description: str) -> int:
     concurrent ``(client, user)`` logins) is a supported and common
     arrangement we don't want to break by default. See issue #24 for
     history.
+
+    .. note::
+       sapsucker 0.5.0 briefly had ``login()`` call this helper
+       implicitly. That was reverted in 0.5.1 because it broke parallel
+       multi-mandant logins. The helper is still public so consumers
+       that genuinely want the old serial-switching behaviour can
+       opt in with one extra line.
 
     Returns the number of connections actually closed. If SAP GUI is
     not running (or ``app.com.Children`` is not accessible for any other
