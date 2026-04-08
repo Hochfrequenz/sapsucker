@@ -215,6 +215,41 @@ class TestParseGetObjectTreeJsonSynthetic:
         assert capped[0].id == "L1"
         assert capped[0].children == []
 
+    def test_five_level_nesting_with_max_depth_variants(self):
+        """5-level chain — max_depth=2 truncates at level 2; max_depth=200 descends all 5.
+
+        The acceptance criteria in issue #20 explicitly call out the
+        5-level nesting case, separately from the 3-level case above.
+        """
+
+        def make_chain(level: int, total: int) -> dict:
+            """Recursively build a chain of `total` levels labeled L1, L2, ..."""
+            return {
+                "properties": {"Id": f"L{level}"},
+                "children": [make_chain(level + 1, total)] if level < total else [],
+            }
+
+        raw = json.dumps({"children": [{"properties": {"Id": "wnd[0]"}, "children": [make_chain(1, 5)]}]})
+
+        # Full descent walks all 5 levels
+        full = parse_get_object_tree_json(raw, max_depth=200)
+        assert len(full) == 1
+        assert full[0].id == "L1"
+        cur = full[0]
+        for expected_id in ("L2", "L3", "L4", "L5"):
+            assert len(cur.children) == 1
+            cur = cur.children[0]
+            assert cur.id == expected_id
+        assert cur.children == []
+
+        # max_depth=2 keeps L1 and L2 only
+        capped = parse_get_object_tree_json(raw, max_depth=2)
+        assert len(capped) == 1
+        assert capped[0].id == "L1"
+        assert len(capped[0].children) == 1
+        assert capped[0].children[0].id == "L2"
+        assert capped[0].children[0].children == []
+
 
 # ---------------------------------------------------------------------------
 # parse_get_object_tree_json — against real SAP-captured fixture
