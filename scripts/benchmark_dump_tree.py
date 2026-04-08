@@ -12,6 +12,7 @@ to scripts/benchmark_output.txt.
 Validates the issue #20 acceptance criterion: "On a representative
 ~200-element screen, dump_tree wall-clock time drops by at least 5x".
 """
+
 # pylint: skip-file
 
 from __future__ import annotations
@@ -35,10 +36,29 @@ class _ExtraFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:  # noqa: D401
         # Pull "extra" fields by diffing record attrs against the standard set
         std = {
-            "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-            "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-            "created", "msecs", "relativeCreated", "thread", "threadName",
-            "processName", "process", "message", "asctime", "extra_str",
+            "name",
+            "msg",
+            "args",
+            "levelname",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "lineno",
+            "funcName",
+            "created",
+            "msecs",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "processName",
+            "process",
+            "message",
+            "asctime",
+            "extra_str",
             "taskName",
         }
         extras = {k: v for k, v in record.__dict__.items() if k not in std}

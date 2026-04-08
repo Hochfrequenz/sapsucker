@@ -25,6 +25,7 @@ What it does:
 Output files are written to scripts/ for the issue spec to reference.
 NOT a pytest test — manual one-off run.
 """
+
 # pylint: skip-file
 
 from __future__ import annotations
@@ -143,7 +144,9 @@ def summarize_json(label: str, raw: str) -> None:
         print(f"  root keys: {sorted(parsed.keys())}")
         if "properties" in parsed:
             props = parsed["properties"]
-            print(f"  root.properties keys: {sorted(props.keys()) if isinstance(props, dict) else type(props).__name__}")
+            print(
+                f"  root.properties keys: {sorted(props.keys()) if isinstance(props, dict) else type(props).__name__}"
+            )
         if "children" in parsed:
             children = parsed["children"]
             print(
@@ -195,9 +198,7 @@ def main() -> int:
     navigate_to_bp_create(session)
 
     # 1. Full props request — the canonical fast-path call
-    raw_full, dur_full = call_get_object_tree(
-        session, "FULL (all 21 props)", "wnd[0]", ALL_21_PROPS
-    )
+    raw_full, dur_full = call_get_object_tree(session, "FULL (all 21 props)", "wnd[0]", ALL_21_PROPS)
     (OUT_DIR / "probe_output_full.json").write_text(raw_full, encoding="utf-8")
     print(f"  wrote {OUT_DIR / 'probe_output_full.json'}")
     parsed_full = json.loads(raw_full)
