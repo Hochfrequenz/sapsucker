@@ -971,7 +971,7 @@ class TestDumpTreeFastPathOptOut:
         rec = next(r for r in caplog.records if r.message == "dump_tree")
         assert rec.path == "fast"
 
-    def test_kwarg_does_not_mutate_module_flag(self, caplog, monkeypatch):
+    def test_kwarg_does_not_mutate_module_flag(self, monkeypatch):
         """Spec test #7: per-call kwarg is per-call only — does NOT touch
         the module flag. Subsequent calls with default kwarg should see
         the original module-flag value, not the value the kwarg implied.
@@ -1069,8 +1069,7 @@ class TestDumpTreeFastPathOptOut:
         # First call: AttributeError, sets flag
         vc.dump_tree()
         assert _base_module._fast_path_permanently_disabled is True
-        first_call_count = session_mock.GetObjectTree.call_count
-        assert first_call_count == 1
+        assert session_mock.GetObjectTree.call_count == 1
 
         # Second call with kwarg=True: re-attempts the fast path (overrides flag),
         # AttributeError fires AGAIN, falls back, returns successfully
