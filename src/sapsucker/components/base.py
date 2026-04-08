@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -328,6 +329,27 @@ def _measure_tree_depth(tree: list[ElementInfo]) -> int:
         if elem.children:
             stack.extend((child, depth + 1) for child in elem.children)
     return max_depth
+
+
+_SAPSUCKER_DISABLE_FAST_PATH_ENV = "SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH"
+_FAST_PATH_DISABLE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _read_fast_path_disabled_from_env() -> bool:
+    """Return True if the env var disables the fast path, False otherwise.
+
+    Truthy values that disable the fast path: ``"1"``, ``"true"``, ``"yes"``,
+    ``"on"`` (case-insensitive). Anything else — unset, ``"0"``, ``"false"``,
+    empty string, garbage, typos — leaves the fast path enabled.
+
+    The allowlist is intentionally small. The cost of a false negative
+    (typo, fast path stays on, user crashes) is one test crash. The cost
+    of a false positive (typo, fast path silently disabled) is a 50× perf
+    regression that doesn't show up in any error log. Strictly worse —
+    so we err on the side of staying fast.
+    """
+    raw = os.environ.get(_SAPSUCKER_DISABLE_FAST_PATH_ENV, "")
+    return raw.strip().lower() in _FAST_PATH_DISABLE_TRUTHY_VALUES
 
 
 _SESSION_TYPE_NAME = "GuiSession"

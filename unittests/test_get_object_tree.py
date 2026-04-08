@@ -44,6 +44,30 @@ from sapsucker.models import ElementInfo
 from unittests.conftest import make_mock_com
 
 # ---------------------------------------------------------------------------
+# Autouse fixture: env-var isolation for the fast-path-disable feature
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_fast_path_state(monkeypatch):
+    """Ensure each test starts with the env var unset and the module flag
+    freshly read.
+
+    Without this, a developer running the suite with
+    SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH set in their shell would see
+    mysterious failures in the existing TestDumpTreeFastPath suite (the
+    AttributeError-and-cache tests assume the module flag is False at
+    test start). The fixture also clears the cache after the test so
+    subsequent tests don't inherit transient state from a runtime
+    AttributeError flip.
+    """
+    monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+    _base_module._reset_fast_path_cache()
+    yield
+    _base_module._reset_fast_path_cache()
+
+
+# ---------------------------------------------------------------------------
 # Fixture path
 # ---------------------------------------------------------------------------
 
@@ -781,3 +805,30 @@ class TestDumpTreeFastPath:
         assert rec.path == "fast"
         assert rec.depth_reached == 1
         assert rec.max_depth_param == 1
+
+
+class TestReadFastPathDisabledFromEnv:
+    """Pin the env-var allowlist parser. The exact set of truthy values
+    is the contract that the spec at docs/superpowers/specs/
+    2026-04-08-issue-23-fast-path-opt-out-design.md commits to.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        ["1", "true", "True", "TRUE", "TrUe", "yes", "YES", "on", "ON"],
+    )
+    def test_truthy_values_disable_fast_path(self, monkeypatch, value):
+        monkeypatch.setenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", value)
+        assert _base_module._read_fast_path_disabled_from_env() is True
+
+    @pytest.mark.parametrize(
+        "value",
+        ["", "0", "false", "False", "FALSE", "no", "off", "garbage", "tru", "yeah", "2"],
+    )
+    def test_falsy_or_garbage_values_keep_fast_path_enabled(self, monkeypatch, value):
+        monkeypatch.setenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", value)
+        assert _base_module._read_fast_path_disabled_from_env() is False
+
+    def test_unset_keeps_fast_path_enabled(self, monkeypatch):
+        monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+        assert _base_module._read_fast_path_disabled_from_env() is False
