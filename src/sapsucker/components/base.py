@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -330,6 +331,27 @@ def _measure_tree_depth(tree: list[ElementInfo]) -> int:
     return max_depth
 
 
+_SAPSUCKER_DISABLE_FAST_PATH_ENV = "SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH"
+_FAST_PATH_DISABLE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _read_fast_path_disabled_from_env() -> bool:
+    """Return True if the env var disables the fast path, False otherwise.
+
+    Truthy values that disable the fast path: ``"1"``, ``"true"``, ``"yes"``,
+    ``"on"`` (case-insensitive). Anything else — unset, ``"0"``, ``"false"``,
+    empty string, garbage, typos — leaves the fast path enabled.
+
+    The allowlist is intentionally small. The cost of a false negative
+    (typo, fast path stays on, user crashes) is one test crash. The cost
+    of a false positive (typo, fast path silently disabled) is a 50× perf
+    regression that doesn't show up in any error log. Strictly worse —
+    so we err on the side of staying fast.
+    """
+    raw = os.environ.get(_SAPSUCKER_DISABLE_FAST_PATH_ENV, "")
+    return raw.strip().lower() in _FAST_PATH_DISABLE_TRUTHY_VALUES
+
+
 _SESSION_TYPE_NAME = "GuiSession"
 _MAX_PARENT_WALK = 10
 
@@ -352,13 +374,27 @@ _MAX_PARENT_WALK = 10
 # older — the older server's first failure disables the fast path for
 # BOTH. This is acceptable because the more common scenario is a single
 # SAP system per process. Reset for testing via ``_reset_fast_path_cache``.
-_fast_path_permanently_disabled: bool = False  # pylint: disable=invalid-name
+#
+# Initial value (0.4.1+): the env var
+# ``SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH`` (allowlist:
+# ``1/true/yes/on`` case-insensitive) lets environments hitting SAP Note
+# 3674808 force the fast path off at process startup. The flag still
+# behaves as a runtime cache for the AttributeError path described
+# above; the env var only sets its initial value. Per-call override is
+# also available via ``GuiVContainer.dump_tree(use_fast_path=...)``;
+# see that method's docstring.
+_fast_path_permanently_disabled: bool = _read_fast_path_disabled_from_env()  # pylint: disable=invalid-name
 
 
 def _reset_fast_path_cache() -> None:
-    """Reset the fast-path-disabled cache. Used by unit tests; not public API."""
+    """Reset the fast-path-disabled cache. Used by unit tests; not public API.
+
+    Re-reads ``SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH`` from the
+    environment so tests that mutate the env var via
+    ``monkeypatch.setenv`` see the new value after calling this.
+    """
     global _fast_path_permanently_disabled  # noqa: PLW0603  pylint: disable=global-statement
-    _fast_path_permanently_disabled = False
+    _fast_path_permanently_disabled = _read_fast_path_disabled_from_env()
 
 
 def _is_permanent_fast_path_failure(exc: BaseException) -> bool:
@@ -491,12 +527,28 @@ def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[Eleme
 class GuiVContainer(GuiContainer, GuiVComponent):
     """Wraps the COM GuiVContainer interface — visual container with children and layout."""
 
-    def dump_tree(self, max_depth: int | None = None) -> list[ElementInfo]:
+    def dump_tree(
+        self,
+        max_depth: int | None = None,
+        *,
+        use_fast_path: bool | None = None,
+    ) -> list[ElementInfo]:
         """Return a recursive tree of ElementInfo for all children.
 
         Args:
             max_depth: Maximum recursion depth. None means unlimited (with a
                        hard safety cap of 200 to prevent infinite recursion).
+            use_fast_path: Per-call override for the GetObjectTree fast path
+                       (keyword-only). ``None`` (default) respects the
+                       process-level decision: enabled by default, disabled
+                       if ``SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH`` is
+                       set in the environment, or disabled if a previous
+                       call observed an AttributeError. ``True`` forces the
+                       fast path attempt for this call only. ``False`` forces
+                       the slow path for this call only. The kwarg does NOT
+                       mutate the process-level decision; subsequent calls
+                       with the default ``None`` see the unchanged module
+                       flag. See sapsucker#23 for context.
 
         Tries the **fast path** first: a single
         :py:meth:`GuiSession.GetObjectTree` call (SAP GUI for Windows
@@ -539,12 +591,26 @@ class GuiVContainer(GuiContainer, GuiVComponent):
 
         result: list[ElementInfo]
         path: str
+        # Decide whether to ATTEMPT the fast path on this call.
+        # Precedence: per-call ``use_fast_path`` kwarg > module flag.
+        # See sapsucker#23 — environments hitting the SAP Note 3674808
+        # native crash bug can disable the fast path globally via the
+        # SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH env var, or
+        # per-call via ``use_fast_path=False``.
+        if use_fast_path is False:
+            fast_path_attempt = False
+        elif use_fast_path is True:
+            fast_path_attempt = True
+        else:
+            fast_path_attempt = not _fast_path_permanently_disabled
+
         # Fast path: bulk-read via GuiSession.GetObjectTree.
-        # Skip the attempt entirely if a previous call has already proven
-        # the fast path is permanently unsupported on this process's SAP
-        # version (e.g. SAP GUI < 7.70 PL3). See
+        # Skip the attempt entirely if (a) the caller or env disabled it,
+        # (b) a previous call has already proven the fast path is permanently
+        # unsupported on this process's SAP version (e.g. SAP GUI < 7.70 PL3),
+        # or (c) we couldn't read the container ID. See
         # ``_fast_path_permanently_disabled``.
-        if _fast_path_permanently_disabled or container_id == "<unknown>":
+        if not fast_path_attempt or container_id == "<unknown>":
             result = _dump_tree_recursive(self._com, 0, effective_depth_cap)
             path = "slow"
         else:
