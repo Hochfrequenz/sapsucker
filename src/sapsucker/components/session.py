@@ -177,6 +177,54 @@ class GuiSession(GuiContainer):
         """Return a human-readable description for a virtual key number."""
         return str(self._com.GetVKeyDescription(v_key))
 
-    def get_object_tree(self, element_id: str) -> Any:
-        """Return the object tree starting from the given element ID."""
-        return self._com.GetObjectTree(element_id)
+    def get_object_tree(self, element_id: str, props: list[str] | None = None) -> str:
+        """Return the SAP GUI object tree starting from *element_id* as JSON.
+
+        Wraps ``GuiSession.GetObjectTree`` (SAP GUI for Windows >= 7.70 PL3,
+        released August 2021). Returns a JSON string containing the
+        requested properties for every element in the subtree rooted at
+        *element_id*. The exact JSON shape (verified empirically against a
+        live SAP system, see ``unittests/fixtures/get_object_tree_*.json``):
+
+            {
+              "children": [
+                {
+                  "properties": {"Id": "...", "Type": "...", ...},
+                  "children": [ ... recursive ... ]
+                }
+              ]
+            }
+
+        The queried element is wrapped one level deep in
+        ``response["children"][0]``; its actual descendants are
+        ``response["children"][0]["children"]``.
+
+        When *props* is None, only the ``Id`` property is returned for
+        each element. Pass an explicit list to get more — note that the
+        list MUST contain only simple-typed properties (String, Integer,
+        Bool); see SAP's ``GuiMagicDispIDs`` enumeration for the supported
+        names.
+
+        This is a single COM round-trip regardless of subtree size, which
+        makes it dramatically cheaper than reading properties individually
+        for trees of more than a handful of elements. Empirical
+        measurement against a 277-element SAP screen: 86 ms for all 21
+        sapsucker-known properties via this call vs. estimated ~2900 ms
+        for the equivalent per-property COM reads. See
+        ``GuiVContainer.dump_tree`` for the consumer.
+
+        Args:
+            element_id: Element ID to start from (e.g. ``"wnd[0]"``,
+                ``"wnd[0]/usr"``).
+            props: Optional list of property names to include. If None,
+                only ``Id`` is returned.
+
+        Returns:
+            A JSON string. Parse with ``json.loads`` or (preferred) one
+            of pydantic's ``model_validate_json`` calls.
+        """
+        # COM dispatch differs between "1 arg" and "2 args" call shapes,
+        # so we cannot just pass ``props=None`` through.
+        if props is None:
+            return str(self._com.GetObjectTree(element_id))
+        return str(self._com.GetObjectTree(element_id, props))
