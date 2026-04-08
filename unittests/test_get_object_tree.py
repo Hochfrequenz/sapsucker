@@ -26,6 +26,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import sapsucker.components.base as _base_module
 from sapsucker._get_object_tree import (
     DUMP_TREE_PROPS,
     GetObjectTreeNode,
@@ -33,7 +34,12 @@ from sapsucker._get_object_tree import (
     GetObjectTreeResponse,
     parse_get_object_tree_json,
 )
-from sapsucker.components.base import GuiVContainer, _find_session_com
+from sapsucker.components.base import (
+    GuiVContainer,
+    _find_session_com,
+    _is_permanent_fast_path_failure,
+    _reset_fast_path_cache,
+)
 from sapsucker.models import ElementInfo
 from unittests.conftest import make_mock_com
 
@@ -473,13 +479,46 @@ class TestFindSessionCom:
         assert result is None
 
     def test_safety_limit_caps_walk_depth(self):
-        """A pathological infinite Parent loop terminates at MAX_PARENT_WALK."""
-        # Build a self-referencing cycle (parent -> self) that is NOT a session.
-        cycle = MagicMock(name="cycle")
-        cycle.Type = "GuiVContainer"
-        cycle.Parent = cycle
-        result = _find_session_com(cycle)
+        """A pathological infinite Parent loop terminates at MAX_PARENT_WALK
+        and uses no more than that many Type reads.
+
+        Reviewer M2: the loose form of this test (just `result is None`)
+        would pass even if MAX_PARENT_WALK was raised to 100k, in which
+        case a real cycle would burn 100k COM hops before falling back.
+        Asserting on the hop counter pins the safety cap as a contract.
+        """
+        from sapsucker.components.base import _MAX_PARENT_WALK  # pylint: disable=import-outside-toplevel
+
+        # Counting wrapper around Type so we can verify the walk terminates
+        # in bounded time. Each iteration of _find_session_com reads .Type
+        # exactly once, so the count tells us how many hops the walk took.
+        type_reads = [0]
+
+        class _CountingMock:
+            @property
+            def Type(self) -> str:
+                type_reads[0] += 1
+                return "GuiVContainer"
+
+            @property
+            def Parent(self) -> "_CountingMock":
+                return self  # cycle: parent is self
+
+        result = _find_session_com(_CountingMock())
         assert result is None
+        # The walk must terminate within _MAX_PARENT_WALK hops, NOT 100k or
+        # whatever a regression might raise the cap to.
+        assert type_reads[0] <= _MAX_PARENT_WALK, (
+            f"_find_session_com walked {type_reads[0]} hops on a cycle; "
+            f"the safety cap should bound it to {_MAX_PARENT_WALK}."
+        )
+        # Also assert it actually USED the cap (not e.g. early-returned at hop 1
+        # for some other reason).
+        assert type_reads[0] == _MAX_PARENT_WALK, (
+            f"Expected the walk to hit the safety cap exactly ({_MAX_PARENT_WALK}); "
+            f"got {type_reads[0]} hops. Either the cap changed or the walk has a "
+            f"different early-exit condition than the test assumes."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -626,6 +665,101 @@ class TestDumpTreeFastPath:
 
         rec = next(r for r in caplog.records if r.message == "dump_tree")
         assert rec.path == "slow"
+
+    def test_fast_path_permanently_disabled_on_attribute_error(self, caplog):
+        """Reviewer I4: AttributeError on GetObjectTree must permanently
+        disable the fast path for this process so subsequent calls skip
+        the doomed attempt and go straight to the slow path.
+        """
+        _reset_fast_path_cache()  # ensure clean starting state
+
+        session_mock = MagicMock(name="session_com")
+        session_mock.Type = "GuiSession"
+        session_mock.Parent = None
+        # Simulate "GetObjectTree method does not exist on this SAP version"
+        # — exactly what an SAP GUI < 7.70 PL3 install would raise.
+        session_mock.GetObjectTree = MagicMock(side_effect=AttributeError("GetObjectTree"))
+
+        child = make_mock_com(type_as_number=31, id="c1", name="txtA")
+        parent = make_mock_com(
+            container_type=True,
+            id="/app/con[0]/ses[0]/wnd[0]/usr",
+            children=[child],
+        )
+        _wire_parent_to_session(parent, session_mock)
+        vc = GuiVContainer(parent)
+
+        try:
+            # FIRST call: fast path attempted, fails with AttributeError,
+            # gets cached as permanently disabled, falls back to slow path.
+            with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+                result1 = vc.dump_tree()
+            assert len(result1) == 1
+            session_mock.GetObjectTree.assert_called_once()
+            assert _base_module._fast_path_permanently_disabled is True
+
+            # SECOND call: cache is set, fast path skipped entirely.
+            # GetObjectTree must NOT be called a second time — that's the
+            # point of the cache.
+            session_mock.GetObjectTree.reset_mock()
+            with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+                result2 = vc.dump_tree()
+            assert len(result2) == 1
+            session_mock.GetObjectTree.assert_not_called()
+
+            # The perf log for the second call should still report path=slow
+            slow_records = [r for r in caplog.records if r.message == "dump_tree" and r.path == "slow"]
+            assert len(slow_records) >= 2  # both calls logged path=slow
+        finally:
+            _reset_fast_path_cache()  # don't leak state to other tests
+
+    def test_transient_failures_do_NOT_disable_fast_path(self, caplog):
+        """Reviewer I4: a transient error (e.g. RuntimeError simulating the
+        SAP Note 3674808 crash bug) should NOT permanently disable the
+        fast path. The next call must retry. Conservative semantics:
+        only AttributeError disables.
+        """
+        _reset_fast_path_cache()
+
+        session_mock = MagicMock(name="session_com")
+        session_mock.Type = "GuiSession"
+        session_mock.Parent = None
+        # RuntimeError = transient (per _is_permanent_fast_path_failure heuristic)
+        session_mock.GetObjectTree = MagicMock(side_effect=RuntimeError("flaky SAP"))
+
+        child = make_mock_com(type_as_number=31, id="c1", name="txtA")
+        parent = make_mock_com(
+            container_type=True,
+            id="/app/con[0]/ses[0]/wnd[0]/usr",
+            children=[child],
+        )
+        _wire_parent_to_session(parent, session_mock)
+        vc = GuiVContainer(parent)
+
+        try:
+            # First call: fast path raises RuntimeError → fall back, but do NOT cache.
+            with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+                vc.dump_tree()
+            assert _base_module._fast_path_permanently_disabled is False
+
+            # Second call: fast path attempted AGAIN (it's a transient failure).
+            session_mock.GetObjectTree.reset_mock()
+            with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+                vc.dump_tree()
+            session_mock.GetObjectTree.assert_called_once()
+            assert _base_module._fast_path_permanently_disabled is False
+        finally:
+            _reset_fast_path_cache()
+
+    def test_is_permanent_fast_path_failure_classification(self):
+        """Verify the heuristic that decides which exception classes are
+        permanent vs transient. AttributeError → permanent (method missing),
+        everything else → transient.
+        """
+        assert _is_permanent_fast_path_failure(AttributeError("GetObjectTree")) is True
+        assert _is_permanent_fast_path_failure(RuntimeError("flaky")) is False
+        assert _is_permanent_fast_path_failure(ValueError("bad json")) is False
+        assert _is_permanent_fast_path_failure(TimeoutError("network")) is False
 
     def test_max_depth_respected_in_fast_path(self, caplog):
         """The fast path must honor the max_depth argument like the slow path does."""

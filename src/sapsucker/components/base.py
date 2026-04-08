@@ -333,6 +333,65 @@ def _measure_tree_depth(tree: list[ElementInfo]) -> int:
 _SESSION_TYPE_NAME = "GuiSession"
 _MAX_PARENT_WALK = 10
 
+# Process-global cache: True once we have observed a fast-path failure that
+# is permanent (e.g. older SAP GUI without GetObjectTree, or a SAP version
+# where GetObjectTree consistently raises). Set by ``GuiVContainer.dump_tree``
+# the first time the fast path fails. Subsequent calls skip the fast-path
+# attempt entirely and go straight to the slow path, avoiding the per-call
+# overhead of `_find_session_com` + a doomed `GetObjectTree` call.
+#
+# Reviewer I4 on PR #22: without this cache, every dump_tree call on a
+# system without `GetObjectTree` pays ~22 wasted COM round-trips before
+# falling back. With it, the cost is amortized to one wasted attempt
+# per process lifetime.
+#
+# Caveat: this is a *process-global* flag, not a per-session cache. The
+# trade-off is simplicity (no need to key on session COM identity, which
+# is unstable across reconnects). The downside is that if a single process
+# talks to two SAP servers — one new enough for GetObjectTree and one
+# older — the older server's first failure disables the fast path for
+# BOTH. This is acceptable because the more common scenario is a single
+# SAP system per process. Reset for testing via ``_reset_fast_path_cache``.
+_fast_path_permanently_disabled: bool = False  # pylint: disable=invalid-name
+
+
+def _reset_fast_path_cache() -> None:
+    """Reset the fast-path-disabled cache. Used by unit tests; not public API."""
+    global _fast_path_permanently_disabled  # noqa: PLW0603  pylint: disable=global-statement
+    _fast_path_permanently_disabled = False
+
+
+def _is_permanent_fast_path_failure(exc: BaseException) -> bool:
+    """Heuristic: should this exception class disable the fast path globally?
+
+    True for "the SAP GUI on this server simply doesn't have GetObjectTree" —
+    i.e. AttributeError when calling the method, or COM errors that indicate
+    "method not found / member not found / interface not supported". These
+    errors are deterministic per server, so caching is safe.
+
+    False for transient errors (network blip, timeout, JSON parse error on
+    a one-off bad response, the SAP Note 3674808 crash). Those should be
+    retried on the next call.
+
+    The heuristic is intentionally conservative: when in doubt we treat the
+    error as transient (return False) so we keep retrying. The cost of a
+    false negative is one wasted fast-path attempt per call; the cost of a
+    false positive is permanently disabling the fast path on a working
+    system. Better to retry forever than to disable forever.
+    """
+    if isinstance(exc, AttributeError):
+        # `obj.GetObjectTree` raised AttributeError → method does not exist
+        # on the COM dispatch interface for this SAP version. Permanent.
+        return True
+    # pywintypes.com_error with the "member not found" pattern would also
+    # qualify, but identifying it portably (across pywin32 versions and
+    # COM error code conventions) is brittle — we leave that as a transient
+    # error and rely on the second-and-subsequent calls also failing fast
+    # via the existing try/except. Net cost: a few wasted COM round-trips
+    # per call on legacy SAP, vs. zero on the AttributeError path which is
+    # what most legacy SAP installs actually emit.
+    return False
+
 
 def _find_session_com(any_com: Any) -> Any | None:
     """Walk up to the GuiSession COM proxy from any descendant element.
@@ -465,6 +524,8 @@ class GuiVContainer(GuiContainer, GuiVComponent):
         pure-Python iteration over the already-built ``ElementInfo`` list,
         no extra COM calls.
         """
+        global _fast_path_permanently_disabled  # noqa: PLW0603  pylint: disable=global-statement
+
         effective_depth_cap = max_depth if max_depth is not None else 200
         start = time.perf_counter()
 
@@ -479,15 +540,32 @@ class GuiVContainer(GuiContainer, GuiVComponent):
         result: list[ElementInfo]
         path: str
         # Fast path: bulk-read via GuiSession.GetObjectTree.
-        try:
-            if container_id == "<unknown>":
-                raise RuntimeError("container Id read failed; cannot use fast path")
-            result = _dump_tree_via_get_object_tree(self._com, container_id, effective_depth_cap)
-            path = "fast"
-        except Exception:
-            logger.debug("dump_tree_fast_path_failed_falling_back", exc_info=True)
+        # Skip the attempt entirely if a previous call has already proven
+        # the fast path is permanently unsupported on this process's SAP
+        # version (e.g. SAP GUI < 7.70 PL3). See
+        # ``_fast_path_permanently_disabled``.
+        if _fast_path_permanently_disabled or container_id == "<unknown>":
             result = _dump_tree_recursive(self._com, 0, effective_depth_cap)
             path = "slow"
+        else:
+            try:
+                result = _dump_tree_via_get_object_tree(self._com, container_id, effective_depth_cap)
+                path = "fast"
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                if _is_permanent_fast_path_failure(exc):
+                    # Cache the verdict so subsequent calls skip the doomed
+                    # attempt. Log at WARNING (not DEBUG) once on the
+                    # transition because it's a meaningful environment
+                    # discovery, not just a routine fallback.
+                    _fast_path_permanently_disabled = True
+                    logger.warning(
+                        "dump_tree_fast_path_permanently_disabled",
+                        extra={"reason": type(exc).__name__, "container_id": container_id},
+                    )
+                else:
+                    logger.debug("dump_tree_fast_path_failed_falling_back", exc_info=True)
+                result = _dump_tree_recursive(self._com, 0, effective_depth_cap)
+                path = "slow"
 
         duration_ms = int((time.perf_counter() - start) * 1000)
 

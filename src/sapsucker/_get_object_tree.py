@@ -81,14 +81,40 @@ def _coerce_sap_bool(value: Any) -> Any:
     ``None``). The two paths must produce identical
     :class:`~sapsucker.models.ElementInfo` shapes.
 
-    Pydantic v2's lax bool parser already handles ``"true"`` / ``"false"``
-    / ``"1"`` / ``"0"`` / actual booleans, so we only need to special-case
-    the empty string. Anything else passes through unchanged for pydantic
-    to handle (or reject loudly if it's truly invalid).
+    Behaviour table (everything observed empirically against real SAP
+    plus the values pydantic v2's lax bool parser accepts after the
+    BeforeValidator runs):
 
-    Verified empirically against real SAP output: bool fields contain
-    ``["", "true", "false"]`` in 3 of 4 cases on a typical busy screen.
-    See ``unittests/fixtures/get_object_tree_bp_create_full.json``.
+    +-------------------+-----------------+
+    | Input             | Result          |
+    +===================+=================+
+    | ``""`` (empty)    | ``False``       |
+    | ``"true"``        | ``True``        |
+    | ``"false"``       | ``False``       |
+    | ``"True"``        | ``True``        |
+    | ``"False"``       | ``False``       |
+    | ``"yes"``         | ``True``        |
+    | ``"no"``          | ``False``       |
+    | ``"1"``           | ``True``        |
+    | ``"0"``           | ``False``       |
+    | ``True``          | ``True``        |
+    | ``False``         | ``False``       |
+    | ``None``          | ValidationError |
+    | ``" "`` (space)   | ValidationError |
+    | ``"unknown"``     | ValidationError |
+    +-------------------+-----------------+
+
+    On a ValidationError the parser raises and ``GuiVContainer.dump_tree``
+    falls back to the per-property slow path. Real SAP only emits
+    ``""``/``"true"``/``"false"`` on the BP fixture (verified) so the
+    extended set is purely defensive — non-strict cases never come up
+    in practice but won't crash if SAP ever changes its mind.
+
+    Real-fixture observations: 3 of 4 bool fields (``Changeable``,
+    ``Modified``, ``IsSymbolFont``) contain ``""`` for some elements.
+    ``ContainerType`` does NOT — see :class:`GetObjectTreeProperties`
+    for why ``container_type`` uses strict ``bool`` instead of
+    :data:`SapBool`.
     """
     if isinstance(value, str) and value == "":
         return False
@@ -247,7 +273,18 @@ def parse_get_object_tree_json(raw: str, max_depth: int) -> list[ElementInfo]:
 
 
 def _to_element_info_list(nodes: list[GetObjectTreeNode], max_depth: int, depth: int) -> list[ElementInfo]:
-    """Convert a list of :class:`GetObjectTreeNode` to :class:`ElementInfo` recursively."""
+    """Convert a list of :class:`GetObjectTreeNode` to :class:`ElementInfo` recursively.
+
+    Implementation note: this is recursive (stack frames per tree depth)
+    rather than iterative-with-explicit-stack like ``_count_tree_elements``
+    in :mod:`sapsucker.components.base`. The reason is consistency with
+    :func:`_dump_tree_recursive` (the slow path's baseline), which is also
+    recursive. Real SAP trees are <20 levels deep — well below Python's
+    1000-frame default recursion limit. ``_count_tree_elements`` is iterative
+    only because it operates on already-built ``ElementInfo`` lists where the
+    ``dump_tree`` 200-level safety cap applies and a defensive iterative
+    form was cheap.
+    """
     if depth >= max_depth:
         return []
     return [_to_element_info(node, max_depth, depth) for node in nodes]
