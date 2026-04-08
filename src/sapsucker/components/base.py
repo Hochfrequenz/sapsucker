@@ -330,6 +330,76 @@ def _measure_tree_depth(tree: list[ElementInfo]) -> int:
     return max_depth
 
 
+_SESSION_TYPE_NAME = "GuiSession"
+_MAX_PARENT_WALK = 10
+
+
+def _find_session_com(any_com: Any) -> Any | None:
+    """Walk up to the GuiSession COM proxy from any descendant element.
+
+    Used by :meth:`GuiVContainer.dump_tree` to obtain the
+    :class:`GuiSession` needed for the bulk-read fast path
+    (:func:`_dump_tree_via_get_object_tree`). Returns ``None`` on any
+    failure — in which case the caller falls back to the per-property
+    slow path. Never raises.
+
+    Implementation note: walks ``.Parent`` until it finds an element
+    whose ``Type`` is ``"GuiSession"``. We deliberately do NOT use
+    ``FindById("/app/con[N]/ses[M]")`` because ``FindById`` on a
+    descendant element resolves IDs **relative to that element**, not
+    absolutely from the application root — verified empirically: SAP
+    raises "The control could not be found by id." when an absolute
+    path is passed to ``FindById`` on a child element.
+
+    The Parent walk is bounded by ``_MAX_PARENT_WALK`` (10) which is
+    far above the realistic SAP tree depth from any leaf to its
+    session (typically 4-7 hops). Each hop is one COM round-trip, so
+    the total cost is small compared to the property-bulk-read we
+    are about to do.
+    """
+    current = any_com
+    for _ in range(_MAX_PARENT_WALK):
+        try:
+            type_name = str(current.Type)
+        except Exception:
+            return None
+        if type_name == _SESSION_TYPE_NAME:
+            return current
+        try:
+            parent = current.Parent
+        except Exception:
+            return None
+        if parent is None:
+            return None
+        current = parent
+    return None
+
+
+def _dump_tree_via_get_object_tree(self_com: Any, container_id: str, max_depth: int) -> list[ElementInfo]:
+    """Bulk-read the entire subtree via ``GuiSession.GetObjectTree`` (fast path).
+
+    Single COM round-trip regardless of tree size. Returns the children
+    of the queried container (not the container itself), matching the
+    :func:`_dump_tree_recursive` contract so the two paths are
+    interchangeable from :meth:`GuiVContainer.dump_tree`'s perspective.
+
+    Raises if no GuiSession can be located, if the GetObjectTree call
+    itself fails, or if the returned JSON cannot be parsed. The caller
+    catches all of these and falls back to the per-property slow path,
+    so a fast-path failure becomes slow-but-functional, never broken.
+    """
+    from sapsucker._get_object_tree import (  # pylint: disable=import-outside-toplevel
+        DUMP_TREE_PROPS,
+        parse_get_object_tree_json,
+    )
+
+    session_com = _find_session_com(self_com)
+    if session_com is None:
+        raise RuntimeError("could not locate GuiSession from this element")
+    raw_json = str(session_com.GetObjectTree(container_id, DUMP_TREE_PROPS))
+    return parse_get_object_tree_json(raw_json, max_depth)
+
+
 def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[ElementInfo]:
     """Recursively walk COM children and build a list of ElementInfo."""
     result: list[ElementInfo] = []
@@ -369,27 +439,57 @@ class GuiVContainer(GuiContainer, GuiVComponent):
             max_depth: Maximum recursion depth. None means unlimited (with a
                        hard safety cap of 200 to prevent infinite recursion).
 
+        Tries the **fast path** first: a single
+        :py:meth:`GuiSession.GetObjectTree` call (SAP GUI for Windows
+        ≥ 7.70 PL3) returns all 21 element properties for the entire
+        subtree as a JSON string in one COM round-trip. On a typical
+        ~280-element SAP screen this is ~30× faster than the per-property
+        path that this method historically used.
+
+        On any exception in the fast path — older SAP GUI without the
+        method, the SAP Note 3674808 crash bug, an unexpected JSON
+        shape, a stale COM proxy that can't resolve the GuiSession,
+        etc. — the method silently falls back to the per-property
+        :func:`_dump_tree_recursive` path. The fallback log line at
+        DEBUG level (``dump_tree_fast_path_failed_falling_back``)
+        lets us monitor frequency post-deploy. A fast-path failure
+        therefore becomes slow-but-functional, never broken.
+
         Emits one INFO log line per call (``event=dump_tree``) with the
         wall-clock duration, the number of elements in the returned tree,
         the actual depth reached, the requested ``max_depth`` (or ``None``
-        if unbounded), and the container's COM ID. Used by downstream
-        consumers (e.g. sapwebgui.mcp) to correlate slow tool calls with
-        the cost of building the tree. The instrumentation overhead is
-        microseconds — pure-Python iteration over the already-built
-        ``ElementInfo`` list, no extra COM calls.
+        if unbounded), the container's COM ID, and which path was taken
+        (``"fast"`` or ``"slow"``). Used by downstream consumers (e.g.
+        sapwebgui.mcp) to correlate slow tool calls with the cost of
+        building the tree. The instrumentation overhead is microseconds —
+        pure-Python iteration over the already-built ``ElementInfo`` list,
+        no extra COM calls.
         """
         effective_depth_cap = max_depth if max_depth is not None else 200
         start = time.perf_counter()
-        result = _dump_tree_recursive(self._com, 0, effective_depth_cap)
-        duration_ms = int((time.perf_counter() - start) * 1000)
 
-        # Defensive: never let perf logging break the actual call. The COM
-        # ID read can fail if the proxy went stale mid-dump; treat that as
-        # an "unknown" container rather than raising.
+        # Read the container ID once — used for both the GetObjectTree
+        # call (which needs an ID to query from) and the perf log line.
+        # Wrapped in try/except so a stale proxy never breaks the dump.
         try:
             container_id = str(self._com.Id)
         except Exception:
             container_id = "<unknown>"
+
+        result: list[ElementInfo]
+        path: str
+        # Fast path: bulk-read via GuiSession.GetObjectTree.
+        try:
+            if container_id == "<unknown>":
+                raise RuntimeError("container Id read failed; cannot use fast path")
+            result = _dump_tree_via_get_object_tree(self._com, container_id, effective_depth_cap)
+            path = "fast"
+        except Exception:
+            logger.debug("dump_tree_fast_path_failed_falling_back", exc_info=True)
+            result = _dump_tree_recursive(self._com, 0, effective_depth_cap)
+            path = "slow"
+
+        duration_ms = int((time.perf_counter() - start) * 1000)
 
         logger.info(
             "dump_tree",
@@ -399,6 +499,7 @@ class GuiVContainer(GuiContainer, GuiVComponent):
                 "depth_reached": _measure_tree_depth(result),
                 "max_depth_param": max_depth,
                 "container_id": container_id,
+                "path": path,
             },
         )
         return result
