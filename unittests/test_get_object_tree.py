@@ -832,3 +832,247 @@ class TestReadFastPathDisabledFromEnv:
     def test_unset_keeps_fast_path_enabled(self, monkeypatch):
         monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
         assert _base_module._read_fast_path_disabled_from_env() is False
+
+
+class TestDumpTreeFastPathOptOut:
+    """Tests for the env var + per-call kwarg opt-out machinery
+    introduced in 0.4.1 to fix sapsucker#23 (SAP Note 3674808 native
+    crash). The fast path is enabled by default; this class verifies
+    every escape hatch.
+    """
+
+    def _make_session_and_vc(self, json_response: str | None = None, raises: BaseException | None = None):
+        """Helper: build a (session_mock, GuiVContainer) pair where
+        GetObjectTree either returns the given JSON or raises the
+        given exception. Both branches share the same wnd[0] mock
+        hierarchy so test bodies focus on the path-decision logic.
+        """
+        if json_response is not None and raises is not None:
+            raise ValueError("pass json_response OR raises, not both")
+        session_mock = MagicMock(name="session_com")
+        session_mock.Type = "GuiSession"
+        session_mock.Parent = None
+        if raises is not None:
+            session_mock.GetObjectTree = MagicMock(side_effect=raises)
+        else:
+            session_mock.GetObjectTree = MagicMock(return_value=json_response or "{}")
+
+        # Build a 1-child tree so the slow path returns something verifiable.
+        child = make_mock_com(type_as_number=31, id="c1", name="txtA")
+        parent = make_mock_com(
+            container_type=True,
+            id="/app/con[0]/ses[0]/wnd[0]",
+            children=[child],
+        )
+        _wire_parent_to_session(parent, session_mock)
+        return session_mock, GuiVContainer(parent)
+
+    # ----- Env-var-driven default -----
+
+    def test_env_var_unset_keeps_fast_path_enabled(self, caplog, monkeypatch):
+        """Spec test #1: with the env var unset, the fast path runs.
+
+        ALSO covers DoD #4 (log line format preserved) by asserting that
+        all six expected fields are present on the log record. The other
+        tests in this class only assert on `path` to keep them focused;
+        this one is the canonical regression check for the log format.
+        """
+        monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+        _base_module._reset_fast_path_cache()
+
+        json_response = BP_FULL.read_text(encoding="utf-8")
+        session_mock, vc = self._make_session_and_vc(json_response=json_response)
+
+        with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+            vc.dump_tree()
+
+        session_mock.GetObjectTree.assert_called_once()
+        rec = next(r for r in caplog.records if r.message == "dump_tree")
+        assert rec.path == "fast"
+
+        # DoD #4: the log line format is preserved across this fix.
+        # Every existing field must still be present; no new fields, no removals.
+        for required_field in ("duration_ms", "elements", "depth_reached", "max_depth_param", "container_id", "path"):
+            assert hasattr(rec, required_field), f"log record missing {required_field}"
+
+    def test_env_var_set_to_1_disables_fast_path(self, caplog, monkeypatch):
+        """Spec test #2: env var = "1" forces the slow path globally."""
+        monkeypatch.setenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", "1")
+        _base_module._reset_fast_path_cache()
+
+        session_mock, vc = self._make_session_and_vc(json_response="{}")
+
+        with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+            vc.dump_tree()
+
+        session_mock.GetObjectTree.assert_not_called()
+        rec = next(r for r in caplog.records if r.message == "dump_tree")
+        assert rec.path == "slow"
+
+    @pytest.mark.parametrize("value", ["1", "true", "True", "yes", "ON", "TrUe"])
+    def test_env_var_truthy_values_disable_fast_path(self, caplog, monkeypatch, value):
+        """Spec test #3: case-insensitive allowlist."""
+        monkeypatch.setenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", value)
+        _base_module._reset_fast_path_cache()
+
+        session_mock, vc = self._make_session_and_vc(json_response="{}")
+
+        with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+            vc.dump_tree()
+
+        session_mock.GetObjectTree.assert_not_called()
+        rec = next(r for r in caplog.records if r.message == "dump_tree")
+        assert rec.path == "slow"
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "garbage", "tru", "yeah"])
+    def test_env_var_falsy_or_garbage_does_not_disable_fast_path(self, caplog, monkeypatch, value):
+        """Spec test #4: anything outside the allowlist leaves fast path on."""
+        monkeypatch.setenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", value)
+        _base_module._reset_fast_path_cache()
+
+        json_response = BP_FULL.read_text(encoding="utf-8")
+        session_mock, vc = self._make_session_and_vc(json_response=json_response)
+
+        with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+            vc.dump_tree()
+
+        session_mock.GetObjectTree.assert_called_once()
+        rec = next(r for r in caplog.records if r.message == "dump_tree")
+        assert rec.path == "fast"
+
+    # ----- Per-call kwarg overrides -----
+
+    def test_kwarg_use_fast_path_false_overrides_enabled_default(self, caplog, monkeypatch):
+        """Spec test #5: kwarg=False forces slow path even when default is fast."""
+        monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+        _base_module._reset_fast_path_cache()
+
+        session_mock, vc = self._make_session_and_vc(json_response="{}")
+
+        with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+            vc.dump_tree(use_fast_path=False)
+
+        session_mock.GetObjectTree.assert_not_called()
+        rec = next(r for r in caplog.records if r.message == "dump_tree")
+        assert rec.path == "slow"
+
+    def test_kwarg_use_fast_path_true_overrides_disabled_default(self, caplog, monkeypatch):
+        """Spec test #6: kwarg=True forces fast path even when env var disables."""
+        monkeypatch.setenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", "1")
+        _base_module._reset_fast_path_cache()
+
+        json_response = BP_FULL.read_text(encoding="utf-8")
+        session_mock, vc = self._make_session_and_vc(json_response=json_response)
+
+        with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+            vc.dump_tree(use_fast_path=True)
+
+        session_mock.GetObjectTree.assert_called_once()
+        rec = next(r for r in caplog.records if r.message == "dump_tree")
+        assert rec.path == "fast"
+
+    def test_kwarg_does_not_mutate_module_flag(self, caplog, monkeypatch):
+        """Spec test #7: per-call kwarg is per-call only — does NOT touch
+        the module flag. Subsequent calls with default kwarg should see
+        the original module-flag value, not the value the kwarg implied.
+        """
+        monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+        _base_module._reset_fast_path_cache()
+
+        json_response = BP_FULL.read_text(encoding="utf-8")
+        session_mock, vc = self._make_session_and_vc(json_response=json_response)
+
+        # First call with kwarg=False → slow path
+        vc.dump_tree(use_fast_path=False)
+        session_mock.GetObjectTree.assert_not_called()
+        assert _base_module._fast_path_permanently_disabled is False
+
+        # Second call with default kwarg → fast path again (module flag unchanged)
+        vc.dump_tree()
+        session_mock.GetObjectTree.assert_called_once()
+        assert _base_module._fast_path_permanently_disabled is False
+
+    def test_kwarg_none_respects_module_flag_when_disabled_by_env(self, caplog, monkeypatch):
+        """Spec test #8: kwarg=None (the default) honors the env-driven flag."""
+        monkeypatch.setenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", "1")
+        _base_module._reset_fast_path_cache()
+
+        session_mock, vc = self._make_session_and_vc(json_response="{}")
+
+        with caplog.at_level(logging.INFO, logger="sapsucker.components.base"):
+            vc.dump_tree(use_fast_path=None)  # explicit None for clarity
+
+        session_mock.GetObjectTree.assert_not_called()
+        rec = next(r for r in caplog.records if r.message == "dump_tree")
+        assert rec.path == "slow"
+
+    # ----- Interaction with the existing AttributeError-based runtime disable -----
+
+    def test_kwarg_none_respects_module_flag_when_disabled_by_attribute_error(self, monkeypatch):
+        """Spec test #9: env unset, fast path raises AttributeError on call 1
+        which sets the module flag to True at runtime; call 2 with default
+        kwarg must take the slow path.
+        """
+        monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+        _base_module._reset_fast_path_cache()
+
+        session_mock, vc = self._make_session_and_vc(raises=AttributeError("GetObjectTree"))
+
+        # First call: AttributeError, slow path, module flag set
+        vc.dump_tree()
+        assert _base_module._fast_path_permanently_disabled is True
+
+        # Second call with default kwarg: skips fast path entirely
+        session_mock.GetObjectTree.reset_mock()
+        vc.dump_tree()
+        session_mock.GetObjectTree.assert_not_called()
+
+    def test_kwarg_true_with_attribute_error_still_falls_back(self, monkeypatch):
+        """Spec test #10: kwarg=True forces the fast path attempt; if that
+        attempt raises AttributeError, the existing fallback still runs
+        AND the module flag still gets set (consistent with 0.4.0 behavior).
+        """
+        monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+        _base_module._reset_fast_path_cache()
+
+        session_mock, vc = self._make_session_and_vc(raises=AttributeError("GetObjectTree"))
+
+        # Single call with kwarg=True: attempts fast path, AttributeError, falls back, sets flag
+        vc.dump_tree(use_fast_path=True)
+        session_mock.GetObjectTree.assert_called_once()
+        assert _base_module._fast_path_permanently_disabled is True
+
+    def test_kwarg_use_fast_path_is_keyword_only(self, monkeypatch):
+        """Spec test #12: use_fast_path is keyword-only. Positional usage
+        must raise TypeError. Pins the keyword-only design choice.
+        """
+        monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+        _base_module._reset_fast_path_cache()
+
+        _, vc = self._make_session_and_vc(json_response="{}")
+
+        with pytest.raises(TypeError):
+            vc.dump_tree(200, False)  # type: ignore[misc]
+
+    def test_kwarg_true_with_runtime_attribute_error_flag_second_call(self, monkeypatch):
+        """Spec test #13: env unset, first call raises AttributeError (sets
+        module flag at runtime), second call with kwarg=True re-attempts
+        the fast path (raises AttributeError again because the mock is
+        still configured to raise), and falls back. The kwarg overrides
+        the *initial decision*, not the runtime fallback.
+        """
+        monkeypatch.delenv("SAPSUCKER_DISABLE_GETOBJECTTREE_FAST_PATH", raising=False)
+        _base_module._reset_fast_path_cache()
+
+        session_mock, vc = self._make_session_and_vc(raises=AttributeError("GetObjectTree"))
+
+        # First call: AttributeError, sets flag
+        vc.dump_tree()
+        assert _base_module._fast_path_permanently_disabled is True
+        first_call_count = session_mock.GetObjectTree.call_count
+        assert first_call_count == 1
+
+        # Second call with kwarg=True: re-attempts the fast path (overrides flag),
+        # AttributeError fires AGAIN, falls back, returns successfully
+        vc.dump_tree(use_fast_path=True)
+        assert session_mock.GetObjectTree.call_count == 2
