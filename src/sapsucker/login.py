@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "cleanup_ghost_connections",
+    "close_connections_named",
     "discover_saplogon_path",
     "login",
     "logoff",
@@ -87,12 +88,17 @@ def login(
         timeout: Max seconds to wait for connection/session to become available.
 
     Returns:
-        A logged-in GuiSession.
+        A logged-in GuiSession whose ``info.client`` and ``info.user``
+        match the requested values.
 
     Raises:
         SapGuiTimeoutError: If SAP GUI or session doesn't become available.
         ScriptingDisabledError: If scripting is disabled on the server.
-        SapConnectionError: If login fails (wrong credentials, SAP error).
+        SapConnectionError: If login fails. This covers wrong credentials,
+            SAP error messages on the status bar, or the session ending up
+            in a different client / as a different user than requested
+            (e.g. because SSO or a cached logon ticket bypassed the
+            explicit credentials — see issue #24).
     """
     from sapsucker import SapGui  # pylint: disable=import-outside-toplevel
 
@@ -102,7 +108,16 @@ def login(
     except SapConnectionError:
         app = SapGui.launch(exe_path=saplogon_exe_path or discover_saplogon_path(), timeout=timeout)
 
-    # Step 2: Open connection
+    # Step 2a: Close any pre-existing connection sharing this description.
+    # ``OpenConnection(description)`` in SAP GUI Scripting returns an
+    # already-open connection by description rather than creating a fresh
+    # one; that would leave us with the prior session (wrong client/user)
+    # and the ``program == SAPMSYST`` guard below would skip the credential
+    # fill block entirely, silently misrouting the caller. Closing matches
+    # up-front forces a fresh SAPMSYST login dynpro — see issue #24.
+    close_connections_named(app, connection_name)
+
+    # Step 2b: Open connection
     conn = app.open_connection(connection_name, sync=True)
     session = wait_for_session(conn, timeout=timeout)
 
@@ -134,6 +149,30 @@ def login(
     if sbar is not None and cast(Any, sbar).message_type == "E":
         raise SapConnectionError(f"Login failed: {cast(Any, sbar).text}")
 
+    # Step 7: Verify we actually landed where we asked to. The Step 2a
+    # close-existing path handles the shared-``connection_name`` COM
+    # dedup case, but other routes to a wrong-client session exist —
+    # notably SSO/SNC or a cached logon ticket that auto-authenticates
+    # before we reach the SAPMSYST dynpro, causing the credential-fill
+    # block to be skipped entirely. In any such case we'd rather raise
+    # loudly here than hand back a session silently logged in as the
+    # wrong user or in the wrong client — see issue #24.
+    actual_client = str(session.info.client)
+    if actual_client != client:
+        raise SapConnectionError(
+            f"Login landed in client {actual_client!r} but {client!r} was requested. "
+            f"This usually means the SAP Logon entry {connection_name!r} was already "
+            "open in a different client and the per-call credential override did not "
+            "take effect."
+        )
+    actual_user = str(session.info.user)
+    if actual_user.upper() != user.upper():
+        raise SapConnectionError(
+            f"Login landed as user {actual_user!r} but {user!r} was requested. "
+            "This can happen when SSO/SNC or a cached logon ticket bypasses the "
+            "explicit credentials passed to login()."
+        )
+
     logger.info(
         "desktop_login",
         extra={"connection": connection_name, "user": user, "system": connection_name},
@@ -157,6 +196,41 @@ def logoff(session: GuiSession) -> None:
 
     # Clean up ghost connections (0 sessions) left behind
     cleanup_ghost_connections()
+
+
+def close_connections_named(app: Any, description: str) -> int:
+    """Close every open connection whose ``Description`` matches *description*.
+
+    Used by :func:`login` to force ``OpenConnection`` to create a fresh
+    connection rather than return an already-open one by name — see
+    issue #24. Safe to call directly from consumer code that needs the
+    same behaviour (e.g. to pre-clean before opening a second mandant
+    on the same SAP Logon entry).
+
+    Returns the number of connections actually closed. If SAP GUI is
+    not running, returns 0 without raising.
+
+    Uses reverse iteration over ``app.com.Children`` because the COM
+    ``GuiConnectionCollection`` mutates on close — the same reverse
+    pattern used by :func:`cleanup_ghost_connections` below.
+    """
+    closed = 0
+    try:
+        children = app.com.Children
+    except Exception:
+        return 0
+
+    for i in range(children.Count - 1, -1, -1):
+        try:
+            conn = children(i)
+            if str(conn.Description) == description:
+                conn.CloseConnection()
+                closed += 1
+        except Exception:
+            pass  # Best effort — never let cleanup mask the caller's real work
+    if closed:
+        logger.debug("close_connections_named", extra={"description": description, "closed": closed})
+    return closed
 
 
 def cleanup_ghost_connections() -> None:
