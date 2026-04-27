@@ -9,6 +9,7 @@
 ![Coverage](https://github.com/Hochfrequenz/sapsucker/actions/workflows/coverage.yml/badge.svg)
 
 Typed Python wrapper for the SAP GUI Scripting API.
+For a Go client around the SAP ADT API, check [**adtler**](https://github.com/Hochfrequenz/adtler).
 
 **sapsucker** gives you typed, IDE-friendly access to SAP GUI for Windows.
 Instead of working with raw COM objects and guessing method names, you get
