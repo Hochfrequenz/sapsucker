@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from sapsucker._wrap import _set_dispatch_tables, wrap_com_object  # noqa: F401  # pylint: disable=unused-import
+from sapsucker._wrap import _set_dispatch_tables
+from sapsucker._wrap import wrap_com_object as wrap_com_object  # noqa: F401  # pylint: disable=unused-import
 from sapsucker.components.application import GuiApplication
 from sapsucker.components.base import GuiComponent
 from sapsucker.components.button import GuiButton
