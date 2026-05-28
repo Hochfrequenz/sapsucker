@@ -1,6 +1,6 @@
 """Base classes for the SAP GUI component hierarchy."""
 
-# pylint: disable=broad-exception-caught
+# pylint: disable=broad-exception-caught,import-outside-toplevel
 
 from __future__ import annotations
 

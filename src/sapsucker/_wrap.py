@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 _type_map: dict[int, type] = {}
 _shell_subtype_map: dict[str, type] = {}
-_shell_type_num: int = 122
-_fallback_cls: type | None = None
+_SHELL_TYPE_NUM: int = 122
+_FALLBACK_CLS: type | None = None
 
 
 def _set_dispatch_tables(
@@ -32,11 +32,11 @@ def _set_dispatch_tables(
     fallback_cls: type,
 ) -> None:
     """Called once by _factory.py after all component classes are defined."""
-    global _type_map, _shell_subtype_map, _shell_type_num, _fallback_cls
+    global _type_map, _shell_subtype_map, _SHELL_TYPE_NUM, _FALLBACK_CLS  # pylint: disable=global-statement
     _type_map = type_map
     _shell_subtype_map = shell_subtype_map
-    _shell_type_num = shell_type_num
-    _fallback_cls = fallback_cls
+    _SHELL_TYPE_NUM = shell_type_num
+    _FALLBACK_CLS = fallback_cls
 
 
 def wrap_com_object(com_obj: Any) -> GuiComponent:
@@ -49,13 +49,13 @@ def wrap_com_object(com_obj: Any) -> GuiComponent:
     """
     type_num = com_obj.TypeAsNumber
     cls = _type_map.get(type_num)
-    if cls is not None and type_num == _shell_type_num:
+    if cls is not None and type_num == _SHELL_TYPE_NUM:
         sub_type = getattr(com_obj, "SubType", "")
         cls = _shell_subtype_map.get(sub_type, cls)
     elif cls is None:
-        cls = _fallback_cls
+        cls = _FALLBACK_CLS
         logger.debug(
             "unknown_type_fallback",
             extra={"type_as_number": type_num, "com_type": getattr(com_obj, "Type", "?")},
         )
-    return cls(com_obj)  # type: ignore[misc]
+    return cls(com_obj)  # type: ignore[misc, no-any-return]

@@ -46,7 +46,7 @@ from sapsucker.components.window import GuiFrameWindow, GuiMainWindow, GuiMessag
 # _set_dispatch_tables, which populates wrap_com_object's dispatch maps.  Any path
 # that imports a component class goes through this __init__, so the maps are always
 # populated before wrap_com_object can be called.
-import sapsucker._factory as _factory  # noqa: F401
+from sapsucker import _factory  # noqa: F401  # isort: skip
 
 __all__ = [
     # base
