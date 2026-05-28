@@ -1,6 +1,6 @@
 """Base classes for the SAP GUI component hierarchy."""
 
-# pylint: disable=import-outside-toplevel,broad-exception-caught
+# pylint: disable=broad-exception-caught
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from sapsucker._errors import ElementNotFoundError
+from sapsucker._wrap import wrap_com_object
 
 if TYPE_CHECKING:
     from sapsucker.components.collection import GuiComponentCollection
@@ -185,8 +186,6 @@ class GuiContainer(GuiComponent):
         Returns:
             The wrapped component, or None if not found and raise_error is False.
         """
-        from sapsucker._factory import wrap_com_object
-
         result = self._com.FindById(id, False)
         if result is None:
             logger.debug("element_not_found", extra={"id": id, "parent": self.id})
@@ -650,15 +649,11 @@ class GuiVContainer(GuiContainer, GuiVComponent):
 
     def find_by_name(self, name: str, type_name: str) -> GuiComponent | None:
         """Find the first child element matching name and type string. Returns None if not found."""
-        from sapsucker._factory import wrap_com_object
-
         result = self._com.FindByName(name, type_name)
         return wrap_com_object(result) if result is not None else None
 
     def find_by_name_ex(self, name: str, type_number: int) -> GuiComponent | None:
         """Find the first child element matching name and type number. Returns None if not found."""
-        from sapsucker._factory import wrap_com_object
-
         result = self._com.FindByNameEx(name, type_number)
         return wrap_com_object(result) if result is not None else None
 

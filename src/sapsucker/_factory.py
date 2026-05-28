@@ -1,10 +1,8 @@
-"""Two-level type dispatch factory for wrapping raw COM objects."""
+"""Two-level type dispatch factory for SAP GUI COM components."""
 
 from __future__ import annotations
 
-import logging
-from typing import Any
-
+from sapsucker._wrap import _set_dispatch_tables, wrap_com_object  # noqa: F401 - re-export
 from sapsucker.components.application import GuiApplication
 from sapsucker.components.base import GuiComponent
 from sapsucker.components.button import GuiButton
@@ -55,8 +53,6 @@ from sapsucker.components.window import (
     GuiMessageWindow,
     GuiModalWindow,
 )
-
-logger = logging.getLogger(__name__)
 
 # Level 1: TypeAsNumber -> Python class
 _TYPE_MAP: dict[int, type[GuiComponent]] = {
@@ -117,23 +113,4 @@ _SHELL_SUBTYPE_MAP: dict[str, type[GuiShell]] = {
 }
 
 
-def wrap_com_object(com_obj: Any) -> GuiComponent:
-    """Wrap a raw COM dispatch object in the appropriate Python class.
-
-    Uses two-level dispatch:
-    1. TypeAsNumber selects the base class.
-    2. For GuiShell (type 122), SubType refines to the concrete shell class.
-    3. Unknown types fall back to GuiComponent.
-    """
-    type_num = com_obj.TypeAsNumber
-    cls = _TYPE_MAP.get(type_num)
-    if cls is GuiShell:
-        sub_type = getattr(com_obj, "SubType", "")
-        cls = _SHELL_SUBTYPE_MAP.get(sub_type, GuiShell)
-    elif cls is None:
-        cls = GuiComponent
-        logger.debug(
-            "unknown_type_fallback",
-            extra={"type_as_number": type_num, "com_type": getattr(com_obj, "Type", "?")},
-        )
-    return cls(com_obj)
+_set_dispatch_tables(_TYPE_MAP, _SHELL_SUBTYPE_MAP, 122, GuiComponent)

@@ -1,7 +1,8 @@
 """Tests for GuiTableControl, GuiTableRow, GuiTableColumn — issues #476, #517."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from sapsucker.components.base import GuiComponent
 from sapsucker.components.table import (
     GuiTableColumn,
     GuiTableControl,
@@ -68,13 +69,25 @@ class TestGuiTableControl:
         tbl._com.Rows.Count = 5
         assert tbl.rows.Count == 5
 
-    def test_get_cell(self):
+    def test_get_cell_calls_wrap(self):
         tbl = _make_table()
         cell_com = MagicMock()
         tbl._com.GetCell.return_value = cell_com
-        result = tbl.get_cell(0, 1)
+        wrapped = MagicMock(spec=GuiComponent)
+        with patch("sapsucker.components.table.wrap_com_object", return_value=wrapped) as mock_wrap:
+            result = tbl.get_cell(0, 1)
         tbl._com.GetCell.assert_called_once_with(0, 1)
-        assert result is cell_com
+        mock_wrap.assert_called_once_with(cell_com)
+        assert result is wrapped
+
+    def test_get_cell_returns_gui_component(self):
+        """get_cell returns a GuiComponent, not a raw COM object."""
+        from unittests.conftest import make_mock_com
+        tbl = _make_table()
+        cell_com = make_mock_com(type_as_number=31)  # GuiTextField
+        tbl._com.GetCell.return_value = cell_com
+        result = tbl.get_cell(0, 0)
+        assert isinstance(result, GuiComponent)
 
     def test_get_absolute_row(self):
         tbl = _make_table()

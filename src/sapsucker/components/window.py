@@ -1,9 +1,8 @@
 """Window components — GuiFrameWindow, GuiMainWindow, GuiModalWindow, GuiMessageWindow."""
 
-# pylint: disable=import-outside-toplevel
-
 from __future__ import annotations
 
+from sapsucker._wrap import wrap_com_object
 from sapsucker.components.base import GuiVComponent, GuiVContainer
 
 __all__ = ["GuiFrameWindow", "GuiMainWindow", "GuiMessageWindow", "GuiModalWindow"]
@@ -28,15 +27,11 @@ class GuiFrameWindow(GuiVContainer):
     @property
     def gui_focus(self) -> GuiVComponent:
         """Return the element that currently has GUI focus."""
-        from sapsucker._factory import wrap_com_object
-
         return wrap_com_object(self._com.GuiFocus)  # type: ignore[return-value]
 
     @property
     def system_focus(self) -> GuiVComponent:
         """Return the element that currently has system focus."""
-        from sapsucker._factory import wrap_com_object
-
         return wrap_com_object(self._com.SystemFocus)  # type: ignore[return-value]
 
     @property
