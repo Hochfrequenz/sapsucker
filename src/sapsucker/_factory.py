@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from sapsucker._wrap import _set_dispatch_tables
-from sapsucker._wrap import (  # noqa: F401  # pylint: disable=unused-import,useless-import-alias
-    wrap_com_object as wrap_com_object,
+from sapsucker._wrap import (
+    _set_dispatch_tables,
+    wrap_com_object as wrap_com_object,  # noqa: F401  # pylint: disable=unused-import,useless-import-alias
 )
 from sapsucker.components.application import GuiApplication
 from sapsucker.components.base import GuiComponent
