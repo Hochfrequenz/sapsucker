@@ -1,11 +1,10 @@
 """Collection wrappers for SAP GUI COM collections."""
 
-# pylint: disable=import-outside-toplevel
-
 from __future__ import annotations
 
 from typing import Any, Iterator
 
+from sapsucker._wrap import wrap_com_object
 from sapsucker.components.base import GuiComponent
 
 __all__ = ["GuiCollection", "GuiComponentCollection"]
@@ -23,8 +22,6 @@ class GuiComponentCollection:
 
     def __getitem__(self, index: int) -> GuiComponent:
         """Return the wrapped component at the given index."""
-        from sapsucker._factory import wrap_com_object
-
         length = self._com.Count
         if index < 0:
             index += length

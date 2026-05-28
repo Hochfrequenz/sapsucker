@@ -42,6 +42,12 @@ from sapsucker.components.toolbar import GuiContextMenu, GuiMenu, GuiMenubar, Gu
 from sapsucker.components.tree import GuiTree
 from sapsucker.components.window import GuiFrameWindow, GuiMainWindow, GuiMessageWindow, GuiModalWindow
 
+# Importing _factory here (after all component classes are defined above) triggers
+# _set_dispatch_tables, which populates wrap_com_object's dispatch maps.  Any path
+# that imports a component class goes through this __init__, so the maps are always
+# populated before wrap_com_object can be called.
+from sapsucker import _factory  # noqa: F401  # isort: skip
+
 __all__ = [
     # base
     "GuiComponent",

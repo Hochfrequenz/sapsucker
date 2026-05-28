@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from sapsucker.components.base import GuiComponent
 from unittests.conftest import is_sap_integration_test_machine
 
 pytestmark = [
@@ -173,15 +174,15 @@ class TestGuiTableControl:
         rows = table.rows
         assert rows is not None
 
-    def test_table_get_cell(self, se37_session):
-        """Verify get_cell returns a COM object for row 0, col 0."""
+    def test_table_get_cell_returns_wrapped_component(self, se37_session):
+        """get_cell returns a wrapped GuiComponent, not a raw COM object."""
         table = _find_table_in_tab(se37_session, _TAB_IMPORT_ID)
         if table is None:
             pytest.skip("No table control found in Import tab")
         if table.row_count == 0 or table.columns.Count == 0:
             pytest.skip("Import table has no data")
         cell = table.get_cell(0, 0)
-        assert cell is not None
+        assert isinstance(cell, GuiComponent)
 
     def test_table_in_export_tab(self, se37_session):
         """The Export tab also contains a table control."""
