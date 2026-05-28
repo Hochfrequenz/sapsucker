@@ -83,6 +83,7 @@ class TestGuiTableControl:
     def test_get_cell_returns_gui_component(self):
         """get_cell returns a GuiComponent, not a raw COM object."""
         from unittests.conftest import make_mock_com
+
         tbl = _make_table()
         cell_com = make_mock_com(type_as_number=31)  # GuiTextField
         tbl._com.GetCell.return_value = cell_com
