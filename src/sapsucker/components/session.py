@@ -1,11 +1,10 @@
 """GuiSession and GuiSessionInfo — session-level wrappers."""
 
-# pylint: disable=import-outside-toplevel
-
 from __future__ import annotations
 
 from typing import Any
 
+from sapsucker._wrap import wrap_com_object
 from sapsucker.components.base import GuiComponent, GuiContainer
 
 __all__ = ["GuiSession", "GuiSessionInfo"]
@@ -145,8 +144,6 @@ class GuiSession(GuiContainer):
     @property
     def active_window(self) -> GuiComponent:
         """Return the active window wrapped in the correct Python class."""
-        from sapsucker._factory import wrap_com_object
-
         return wrap_com_object(self._com.ActiveWindow)
 
     def create_session(self) -> None:

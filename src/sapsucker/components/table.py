@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sapsucker._wrap import wrap_com_object
 from sapsucker.components.base import GuiComponent, GuiVContainer
 
 __all__ = ["GuiTableColumn", "GuiTableControl", "GuiTableRow"]
@@ -53,9 +54,9 @@ class GuiTableControl(GuiVContainer):
         """Return the COM rows collection."""
         return self._com.Rows
 
-    def get_cell(self, row: int, col: int) -> Any:
-        """Return the COM object for the cell at (row, col)."""
-        return self._com.GetCell(row, col)
+    def get_cell(self, row: int, col: int) -> GuiComponent:
+        """Return the wrapped component for the cell at (row, col)."""
+        return wrap_com_object(self._com.GetCell(row, col))
 
     def get_absolute_row(self, row: int) -> "GuiTableRow":
         """Return a row by absolute index (works with scrolled tables).

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from sapsucker._wrap import wrap_com_object
 from sapsucker.components.base import GuiContainer
 
 if TYPE_CHECKING:
@@ -33,8 +34,6 @@ class GuiApplication(GuiContainer):
     @property
     def active_session(self) -> GuiSession:
         """Return the currently active session."""
-        from sapsucker._factory import wrap_com_object
-
         return wrap_com_object(self._com.ActiveSession)  # type: ignore[return-value]
 
     @property
@@ -77,7 +76,6 @@ class GuiApplication(GuiContainer):
                 connection name is not found in SAP Logon.
         """
         from sapsucker._errors import SapConnectionError
-        from sapsucker._factory import wrap_com_object
 
         try:
             com_conn = self._com.OpenConnection(description, sync, raise_error)
@@ -101,8 +99,6 @@ class GuiApplication(GuiContainer):
         self, conn_string: str, sync: bool = True, raise_error: bool = True
     ) -> GuiConnection:
         """Open a connection using a raw connection string."""
-        from sapsucker._factory import wrap_com_object
-
         com_conn = self._com.OpenConnectionByConnectionString(conn_string, sync, raise_error)
         return wrap_com_object(com_conn)  # type: ignore[return-value]
 
