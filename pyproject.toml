@@ -28,7 +28,7 @@ dynamic = ["readme", "version"]
 
 [project.optional-dependencies]
 tests = [
-    "pytest==9.0.3",
+    "pytest==9.1.0",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
 ]
