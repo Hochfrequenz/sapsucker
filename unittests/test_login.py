@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sapsucker._errors import SapConnectionError, SapGuiTimeoutError
+from sapsucker._errors import SapConnectionError, SapGuiTimeoutError, ScriptingDisabledError
 from sapsucker.login import (
     _FALLBACK_SAPLOGON_PATH,
     _handle_multiple_logon_popup,
@@ -534,6 +534,7 @@ class TestWaitForSession:
         from sapsucker.components.session import GuiSession as GuiSessionCls
 
         conn = MagicMock()
+        conn.disabled_by_server = False
         mock_session = MagicMock(spec=GuiSessionCls)
 
         conn.children.__len__ = lambda self: 1
@@ -545,7 +546,54 @@ class TestWaitForSession:
     def test_raises_timeout(self):
         """wait_for_session() raises SapGuiTimeoutError when no session appears."""
         conn = MagicMock()
+        conn.disabled_by_server = False
         conn.children.__len__ = lambda self: 0
 
         with pytest.raises(SapGuiTimeoutError, match="No session available"):
             wait_for_session(conn, timeout=1)
+
+    def test_raises_scripting_disabled_error_when_disabled_by_server(self):
+        """wait_for_session() raises ScriptingDisabledError immediately when DisabledByServer=True."""
+        conn = MagicMock()
+        conn.disabled_by_server = True
+
+        with pytest.raises(ScriptingDisabledError, match="DisabledByServer=True"):
+            wait_for_session(conn, timeout=30)
+
+    def test_does_not_raise_scripting_disabled_error_when_not_disabled(self):
+        """wait_for_session() does NOT raise ScriptingDisabledError when disabled_by_server=False."""
+        from sapsucker.components.session import GuiSession as GuiSessionCls
+
+        conn = MagicMock()
+        conn.disabled_by_server = False
+        mock_session = MagicMock(spec=GuiSessionCls)
+        conn.children.__len__ = lambda self: 1
+        conn.children.__getitem__ = lambda self, i: mock_session
+
+        result = wait_for_session(conn, timeout=2)
+        assert result is mock_session
+
+    def test_com_error_reading_disabled_by_server_falls_through_to_timeout(self):
+        """A COM error reading disabled_by_server is treated as False, not surfaced.
+
+        ``getattr(..., False)`` only shields against a missing attribute; the
+        underlying ``.DisabledByServer`` COM read can raise ``pywintypes.com_error``
+        on a flaky proxy. That read failure must degrade to the normal timeout path,
+        not become an unhandled error or a spurious ScriptingDisabledError.
+        """
+
+        class _RaisingConn:
+            """Minimal connection whose disabled_by_server read raises, with no sessions."""
+
+            @property
+            def disabled_by_server(self):
+                raise RuntimeError("simulated com_error")
+
+            @property
+            def children(self):
+                empty = MagicMock()
+                empty.__len__ = lambda self: 0
+                return empty
+
+        with pytest.raises(SapGuiTimeoutError, match="No session available"):
+            wait_for_session(_RaisingConn(), timeout=1)

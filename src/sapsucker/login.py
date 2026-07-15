@@ -31,7 +31,7 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any, cast
 
-from sapsucker._errors import SapConnectionError, SapGuiTimeoutError
+from sapsucker._errors import SapConnectionError, SapGuiTimeoutError, ScriptingDisabledError
 
 logger = logging.getLogger(__name__)
 
@@ -295,9 +295,38 @@ def wait_for_session(conn: Any, timeout: int = 30) -> GuiSession:
     """Wait until the connection has at least one session, then return it wrapped.
 
     Raises:
+        ScriptingDisabledError: If the server has disabled SAP GUI Scripting for
+            this connection (``DisabledByServer=True``). This is a permanent
+            condition for the connection — no amount of waiting will fix it.
         SapGuiTimeoutError: If no session appears within *timeout* seconds.
     """
     from sapsucker.components.session import GuiSession as GuiSessionCls
+
+    # Documented permanent condition: when the server forbids scripting for this
+    # connection, DisabledByServer=True and the session collection stays empty
+    # forever.  Surface it as a clear, actionable error rather than letting the
+    # loop below time out opaquely.  The flag is static for the connection, so
+    # one up-front check is sufficient.  Any other reason the collection is empty
+    # still falls through to the timeout below.
+    #
+    # The read is wrapped defensively: ``getattr`` alone only shields against a
+    # *missing* attribute (AttributeError), but the underlying ``.DisabledByServer``
+    # COM read can raise ``pywintypes.com_error`` on a flaky/stale proxy.  Treat any
+    # read failure as "not disabled" so a transient error degrades to the normal
+    # timeout path below instead of surfacing as an unhandled COM error.
+    try:
+        disabled_by_server = bool(getattr(conn, "disabled_by_server", False))
+    except Exception:  # noqa: BLE001  pylint: disable=broad-exception-caught
+        disabled_by_server = False
+    if disabled_by_server:
+        raise ScriptingDisabledError(
+            "SAP GUI Scripting is disabled by the server for this connection "
+            "(DisabledByServer=True). Set sapgui/user_scripting=TRUE for the "
+            "application server this connection uses (instance profile via RZ10, "
+            "or dynamically via RZ11 on that instance), then re-login. Note a "
+            "dynamic RZ11 change only affects the instance it was made on, so "
+            "load-balanced logons can still land on an instance where scripting is off."
+        )
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
