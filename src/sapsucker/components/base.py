@@ -10,7 +10,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from sapsucker._errors import ElementNotFoundError
-from sapsucker._wrap import wrap_com_object
+from sapsucker._wrap import com_collection_item, wrap_com_object
 
 if TYPE_CHECKING:
     from sapsucker.components.collection import GuiComponentCollection
@@ -275,7 +275,7 @@ def _probe_bdt_fields(com_obj: Any) -> list[ElementInfo]:
         try:
             found = com_obj.FindAllByNameEx("*", type_num)
             for j in range(found.Count):
-                child = found.Item(j)
+                child = com_collection_item(found, j)
                 child_id = str(_safe_com_attr(child, "Id", ""))
                 if child_id in seen_ids:
                     continue
@@ -506,7 +506,7 @@ def _dump_tree_recursive(com_obj: Any, depth: int, max_depth: int) -> list[Eleme
     if count > 0:
         for i in range(count):
             try:
-                child = children_com.Item(i)
+                child = com_collection_item(children_com, i)
             except Exception:
                 continue
             is_container = bool(_safe_com_attr(child, "ContainerType", False))

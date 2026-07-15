@@ -71,6 +71,27 @@ class TestGuiComponentCollection:
         assert len(gcc) == 0
         assert list(gcc) == []
 
+    def test_getitem_falls_back_when_item_raises_bad_index(self):
+        """Indexing still works when raw Item(i) raises SAP GUI error 618.
+
+        Regression guard for sapgui.mcp#804: on some hosts ``Item(<int>)`` raises
+        ``com_error`` 618 "Bad index type for collection access." while
+        ``ElementAt(<int>)`` returns the element fine. com_collection_item must
+        transparently fall back so ``collection[i]`` (and, through it, iteration)
+        keep working.
+        """
+        items = _make_component_items(2)
+        col = MagicMock()
+        col.Count = 2
+        col.Item.side_effect = RuntimeError("Bad index type for collection access.")
+        col.ElementAt = lambda i: items[i]
+
+        gcc = GuiComponentCollection(col)
+        assert gcc[0].com is items[0]
+        assert gcc[1].com is items[1]
+        # Iteration routes through __getitem__, so it recovers too.
+        assert [r.com for r in gcc] == items
+
 
 class TestGuiCollection:
     def test_len(self):

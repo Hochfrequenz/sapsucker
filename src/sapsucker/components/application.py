@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from sapsucker._wrap import wrap_com_object
+from sapsucker._wrap import com_collection_item, wrap_com_object
 from sapsucker.components.base import GuiContainer
 
 if TYPE_CHECKING:
@@ -116,7 +116,7 @@ class GuiApplication(GuiContainer):
             # so closing from the end avoids skipping connections.
             for i in range(self._com.Children.Count - 1, -1, -1):
                 try:
-                    self._com.Children.Item(i).CloseConnection()
+                    com_collection_item(self._com.Children, i).CloseConnection()
                 except Exception:  # noqa: BLE001
                     pass
         except Exception:  # noqa: BLE001

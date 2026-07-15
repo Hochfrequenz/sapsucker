@@ -597,3 +597,30 @@ class TestWaitForSession:
 
         with pytest.raises(SapGuiTimeoutError, match="No session available"):
             wait_for_session(_RaisingConn(), timeout=1)
+
+    def test_returns_session_when_raw_children_item_raises_bad_index(self):
+        """End-to-end regression guard for sapgui.mcp#804.
+
+        On the failing host ``connection.Children.Count == 1`` but the raw
+        ``Children.Item(0)`` raises SAP GUI error 618 "Bad index type for
+        collection access.", which the old poll loop swallowed and spun to a
+        timeout. Driving the REAL GuiConnection -> GuiComponentCollection ->
+        com_collection_item path, wait_for_session must now recover via the
+        ElementAt fallback and return the session.
+        """
+        from sapsucker.components.connection import GuiConnection
+        from sapsucker.components.session import GuiSession as GuiSessionCls
+        from unittests.conftest import make_mock_com
+
+        session_com = make_mock_com(type_as_number=12, type_name="GuiSession", name="ses[0]")
+        children = MagicMock()
+        children.Count = 1
+        children.Item.side_effect = RuntimeError("Bad index type for collection access.")
+        children.ElementAt = lambda i: session_com
+        conn_com = MagicMock()
+        conn_com.DisabledByServer = False
+        conn_com.Children = children
+
+        result = wait_for_session(GuiConnection(conn_com), timeout=2)
+        assert isinstance(result, GuiSessionCls)
+        assert result.com is session_com

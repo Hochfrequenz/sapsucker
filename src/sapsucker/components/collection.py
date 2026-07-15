@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterator
 
-from sapsucker._wrap import wrap_com_object
+from sapsucker._wrap import com_collection_item, wrap_com_object
 from sapsucker.components.base import GuiComponent
 
 __all__ = ["GuiCollection", "GuiComponentCollection"]
@@ -27,7 +27,7 @@ class GuiComponentCollection:
             index += length
         if index < 0 or index >= length:
             raise IndexError(f"Index {index} out of range for collection of length {length}")
-        return wrap_com_object(self._com.Item(index))
+        return wrap_com_object(com_collection_item(self._com, index))
 
     def __iter__(self) -> Iterator[GuiComponent]:
         """Iterate over all wrapped components."""
@@ -55,12 +55,12 @@ class GuiCollection:
             index += length
         if index < 0 or index >= length:
             raise IndexError(f"Index {index} out of range for collection of length {length}")
-        return self._com.Item(index)
+        return com_collection_item(self._com, index)
 
     def __iter__(self) -> Iterator[Any]:
         """Iterate over all items."""
         for i in range(self._com.Count):
-            yield self._com.Item(i)
+            yield com_collection_item(self._com, i)
 
     def __repr__(self) -> str:
         return f"GuiCollection(count={self._com.Count})"

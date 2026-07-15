@@ -336,7 +336,12 @@ def wait_for_session(conn: Any, timeout: int = 30) -> GuiSession:
                 if isinstance(session, GuiSessionCls):
                     return session
         except Exception:
-            pass
+            # Tolerate transient errors while the session is still materialising,
+            # but log them: a persistent error here (e.g. the SAP GUI COM error 618
+            # "Bad index type" that ``conn.children[0]`` used to raise on some hosts,
+            # sapgui.mcp#804) would otherwise silently spin to the timeout below with
+            # no clue as to why. See ``com_collection_item`` for that specific fix.
+            logger.debug("wait_for_session_poll_error", exc_info=True)
         time.sleep(0.5)
     raise SapGuiTimeoutError(f"No session available on connection after {timeout}s")
 
