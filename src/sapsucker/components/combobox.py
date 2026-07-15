@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sapsucker._wrap import com_collection_item
 from sapsucker.components.base import GuiVComponent
 
 __all__ = ["GuiComboBox", "GuiComboBoxEntry"]
@@ -54,7 +55,7 @@ class GuiComboBox(GuiVComponent):
         """Return all entries as a list of GuiComboBoxEntry."""
         result = []
         for i in range(self._com.Entries.Count):
-            result.append(GuiComboBoxEntry(self._com.Entries.Item(i)))
+            result.append(GuiComboBoxEntry(com_collection_item(self._com.Entries, i)))
         return result
 
     @property

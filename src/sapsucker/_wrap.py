@@ -59,3 +59,50 @@ def wrap_com_object(com_obj: Any) -> GuiComponent:
             extra={"type_as_number": type_num, "com_type": getattr(com_obj, "Type", "?")},
         )
     return cls(com_obj)  # type: ignore[misc, no-any-return]
+
+
+def com_collection_item(com_collection: Any, index: int) -> Any:
+    """Return the raw COM element at *index* from a SAP GUI COM collection.
+
+    Works around SAP GUI COM error 618, ``"Bad index type for collection
+    access."``, which some hosts raise for ``collection.Item(<int>)`` under
+    pywin32 late binding **even when the collection is perfectly healthy**.
+
+    Observed on a fresh Windows 11 / SAP GUI 8.0 host (Hochfrequenz/sapgui.mcp#804):
+    ``connection.Children.Count == 1``, yet ``Children.Item(0)`` raises 618 while
+    ``Children(0)`` (the collection's default member) and ``Children.ElementAt(0)``
+    both return the element fine. The same code works on other hosts, so the
+    difference is in how the integer index is marshalled to ``Item`` — not the
+    collection, the element, or the server. This silently broke ``login()``:
+    ``wait_for_session`` reads ``conn.children[0]``, the ``Item`` call raised, and a
+    broad ``except`` swallowed it, so login spun to a 30s timeout with no session.
+
+    Strategy, in order (first that succeeds wins):
+      1. ``Item(index)`` — the historical path. Tried first so behaviour is byte
+         -for-byte identical on the (majority of) hosts where it already works;
+         this fix can only *add* success cases, never remove one.
+      2. ``ElementAt(index)`` — SAP's documented integer accessor; accepted on
+         hosts that reject ``Item``'s marshalled index.
+      3. default member ``collection(index)`` — last resort; empirically accepted
+         wherever ``ElementAt`` is.
+
+    If every strategy fails, the ORIGINAL ``Item`` error is re-raised, so a
+    genuinely bad index still surfaces its real COM error rather than a masked one.
+    """
+    try:
+        return com_collection.Item(index)
+    except Exception as item_error:  # pylint: disable=broad-exception-caught
+        # ``getattr(..., None)`` returns a live method proxy for late-bound
+        # CDispatch objects (so this branch is reached on real SAP hosts), and
+        # ``None`` for plain objects that genuinely lack the method.
+        element_at = getattr(com_collection, "ElementAt", None)
+        if element_at is not None:
+            try:
+                return element_at(index)
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+        try:
+            return com_collection(index)  # default member: collection(index)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+        raise item_error
