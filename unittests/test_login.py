@@ -572,3 +572,28 @@ class TestWaitForSession:
 
         result = wait_for_session(conn, timeout=2)
         assert result is mock_session
+
+    def test_com_error_reading_disabled_by_server_falls_through_to_timeout(self):
+        """A COM error reading disabled_by_server is treated as False, not surfaced.
+
+        ``getattr(..., False)`` only shields against a missing attribute; the
+        underlying ``.DisabledByServer`` COM read can raise ``pywintypes.com_error``
+        on a flaky proxy. That read failure must degrade to the normal timeout path,
+        not become an unhandled error or a spurious ScriptingDisabledError.
+        """
+
+        class _RaisingConn:
+            """Minimal connection whose disabled_by_server read raises, with no sessions."""
+
+            @property
+            def disabled_by_server(self):
+                raise RuntimeError("simulated com_error")
+
+            @property
+            def children(self):
+                empty = MagicMock()
+                empty.__len__ = lambda self: 0
+                return empty
+
+        with pytest.raises(SapGuiTimeoutError, match="No session available"):
+            wait_for_session(_RaisingConn(), timeout=1)

@@ -308,7 +308,17 @@ def wait_for_session(conn: Any, timeout: int = 30) -> GuiSession:
     # loop below time out opaquely.  The flag is static for the connection, so
     # one up-front check is sufficient.  Any other reason the collection is empty
     # still falls through to the timeout below.
-    if getattr(conn, "disabled_by_server", False):
+    #
+    # The read is wrapped defensively: ``getattr`` alone only shields against a
+    # *missing* attribute (AttributeError), but the underlying ``.DisabledByServer``
+    # COM read can raise ``pywintypes.com_error`` on a flaky/stale proxy.  Treat any
+    # read failure as "not disabled" so a transient error degrades to the normal
+    # timeout path below instead of surfacing as an unhandled COM error.
+    try:
+        disabled_by_server = bool(getattr(conn, "disabled_by_server", False))
+    except Exception:  # noqa: BLE001  pylint: disable=broad-exception-caught
+        disabled_by_server = False
+    if disabled_by_server:
         raise ScriptingDisabledError(
             "SAP GUI Scripting is disabled by the server for this connection "
             "(DisabledByServer=True). Set sapgui/user_scripting=TRUE for the "
