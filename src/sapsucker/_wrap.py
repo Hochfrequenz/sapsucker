@@ -78,9 +78,9 @@ def com_collection_item(com_collection: Any, index: int) -> Any:
     broad ``except`` swallowed it, so login spun to a 30s timeout with no session.
 
     Strategy, in order (first that succeeds wins):
-      1. ``Item(index)`` — the historical path. Tried first so behaviour is byte
-         -for-byte identical on the (majority of) hosts where it already works;
-         this fix can only *add* success cases, never remove one.
+      1. ``Item(index)`` — the historical path. Tried first so behaviour is
+         byte-for-byte identical on the (majority of) hosts where it already
+         works; this fix can only *add* success cases, never remove one.
       2. ``ElementAt(index)`` — SAP's documented integer accessor; accepted on
          hosts that reject ``Item``'s marshalled index.
       3. default member ``collection(index)`` — last resort; empirically accepted
@@ -91,7 +91,7 @@ def com_collection_item(com_collection: Any, index: int) -> Any:
     """
     try:
         return com_collection.Item(index)
-    except Exception as item_error:  # pylint: disable=broad-exception-caught
+    except Exception:  # pylint: disable=broad-exception-caught
         # ``getattr(..., None)`` returns a live method proxy for late-bound
         # CDispatch objects (so this branch is reached on real SAP hosts), and
         # ``None`` for plain objects that genuinely lack the method.
@@ -105,4 +105,8 @@ def com_collection_item(com_collection: Any, index: int) -> Any:
             return com_collection(index)  # default member: collection(index)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
-        raise item_error
+        # Bare ``raise`` (not ``raise <saved exc>``) so the ORIGINAL traceback from
+        # the failed ``Item(index)`` call is preserved. Once the inner fallback
+        # handlers have completed, the exception being handled here is again the
+        # original ``Item`` error, so this re-raises it — not a fallback's error.
+        raise
