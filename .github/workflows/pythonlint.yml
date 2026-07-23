@@ -10,17 +10,27 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        linter-env: ["linting", "type_check", "spell_check"]
+        include:
+          - group: linting
+            commands: |
+              uv run pylint sapsucker
+              uv run pylint --recursive=y examples
+          - group: type_check
+            commands: |
+              uv run mypy --show-error-codes src/sapsucker --strict
+              uv run mypy --show-error-codes examples/sapsucker --strict --ignore-missing-imports
+          - group: spell_check
+            commands: |
+              uv run codespell --ignore-words=domain-specific-terms.txt src
+              uv run codespell --ignore-words=domain-specific-terms.txt examples
+              uv run codespell --ignore-words=domain-specific-terms.txt README.md
     steps:
       - uses: actions/checkout@v7
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
         with:
-          python-version: 3.14
+          python-version: "3.14"
       - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install tox
-      - name: Run ${{ matrix.linter-env }} via Tox
-        run: |
-          tox -e ${{ matrix.linter-env }}
+        run: uv sync --group ${{ matrix.group }}
+      - name: Run ${{ matrix.group }}
+        run: ${{ matrix.commands }}

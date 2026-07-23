@@ -178,16 +178,16 @@ and an `asyncio.to_thread()` example.
 
 Contributions are welcome! Please open an issue first to discuss what you'd like to change.
 
-For detailed setup instructions (tox environments, CI, linting, formatting, etc.), see the [Hochfrequenz Python Template Repository](https://github.com/Hochfrequenz/python_template_repository).
+For detailed setup instructions (uv dependency groups, CI, linting, formatting, etc.), see the [Hochfrequenz Python Template Repository](https://github.com/Hochfrequenz/python_template_repository).
 
 ```bash
 # Clone and install dev dependencies
 git clone https://github.com/Hochfrequenz/sapsucker.git
 cd sapsucker
-pip install -e ".[dev]"
+uv sync --group dev
 
 # Run unit tests (no SAP required, works on any OS)
-pytest unittests/ -v
+uv run pytest unittests/ -v
 ```
 
 ### Integration tests against real SAP
@@ -205,7 +205,7 @@ Integration tests run against a real SAP GUI system and are automatically skippe
    ```
 3. Run:
    ```bash
-   pytest unittests/ -k integration -v
+   uv run pytest unittests/ -k integration -v
    ```
 
 Integration tests run by default on any local machine and are automatically skipped in CI (GitHub Actions). Set `SAP_SKIP_INTEGRATION=1` to skip them locally. They cover SE80, SE16N, SE37, SE38, and SM37 — all read-only, no SAP data is modified.
