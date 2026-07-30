@@ -58,7 +58,7 @@ class GuiTableControl(GuiVContainer):
         """Return the wrapped component for the cell at (row, col)."""
         return wrap_com_object(self._com.GetCell(row, col))
 
-    def get_absolute_row(self, row: int) -> "GuiTableRow":
+    def get_absolute_row(self, row: int) -> GuiTableRow:
         """Return a row by absolute index (works with scrolled tables).
 
         Unlike indexing via rows[i], this accounts for the scroll position

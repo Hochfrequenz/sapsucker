@@ -316,7 +316,7 @@ def wait_for_session(conn: Any, timeout: int = 30) -> GuiSession:
     # timeout path below instead of surfacing as an unhandled COM error.
     try:
         disabled_by_server = bool(getattr(conn, "disabled_by_server", False))
-    except Exception:  # noqa: BLE001  pylint: disable=broad-exception-caught
+    except Exception:
         disabled_by_server = False
     if disabled_by_server:
         raise ScriptingDisabledError(
