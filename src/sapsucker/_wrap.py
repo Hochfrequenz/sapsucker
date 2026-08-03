@@ -32,7 +32,7 @@ def _set_dispatch_tables(
     fallback_cls: type,
 ) -> None:
     """Called once by _factory.py after all component classes are defined."""
-    global _type_map, _shell_subtype_map, _SHELL_TYPE_NUM, _FALLBACK_CLS  # pylint: disable=global-statement
+    global _type_map, _shell_subtype_map, _SHELL_TYPE_NUM, _FALLBACK_CLS  # noqa: PLW0603  pylint: disable=global-statement
     _type_map = type_map
     _shell_subtype_map = shell_subtype_map
     _SHELL_TYPE_NUM = shell_type_num

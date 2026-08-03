@@ -89,10 +89,10 @@ class GuiApplication(GuiContainer):
                 pass
             if detail:
                 raise SapConnectionError(
-                    f"SAP server unreachable for connection '{description}'. " f"Check VPN and server status.\n{detail}"
+                    f"SAP server unreachable for connection '{description}'. Check VPN and server status.\n{detail}"
                 ) from e
             raise SapConnectionError(
-                f"Could not open connection '{description}'. " f"Verify the name matches an entry in SAP Logon."
+                f"Could not open connection '{description}'. Verify the name matches an entry in SAP Logon."
             ) from e
 
     def open_connection_by_connection_string(
@@ -117,7 +117,7 @@ class GuiApplication(GuiContainer):
             for i in range(self._com.Children.Count - 1, -1, -1):
                 try:
                     com_collection_item(self._com.Children, i).CloseConnection()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass

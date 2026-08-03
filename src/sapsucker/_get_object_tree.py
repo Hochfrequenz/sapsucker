@@ -29,8 +29,8 @@ from sapsucker.models import ElementInfo
 
 __all__ = [
     "DUMP_TREE_PROPS",
-    "GetObjectTreeProperties",
     "GetObjectTreeNode",
+    "GetObjectTreeProperties",
     "GetObjectTreeResponse",
     "parse_get_object_tree_json",
 ]
@@ -197,7 +197,7 @@ class GetObjectTreeNode(BaseModel):
     """
 
     properties: GetObjectTreeProperties = Field(default_factory=GetObjectTreeProperties)
-    children: list["GetObjectTreeNode"] = Field(default_factory=list)
+    children: list[GetObjectTreeNode] = Field(default_factory=list)
 
 
 class GetObjectTreeResponse(BaseModel):

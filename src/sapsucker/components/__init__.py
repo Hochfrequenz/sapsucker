@@ -48,7 +48,7 @@ from sapsucker.components.window import GuiFrameWindow, GuiMainWindow, GuiMessag
 # populated before wrap_com_object can be called.
 from sapsucker import _factory  # noqa: F401  # isort: skip
 
-__all__ = [
+__all__ = [  # noqa: RUF022 -- deliberately grouped by SAP GUI component category, not alphabetized
     # base
     "GuiComponent",
     "GuiVComponent",

@@ -30,17 +30,34 @@ dynamic = ["readme", "version"]
 Changelog = "https://github.com/Hochfrequenz/sapsucker/releases"
 Homepage = "https://github.com/Hochfrequenz/sapsucker"
 
-[tool.black]
+[tool.ruff]
 line-length = 120
-target_version = ["py311", "py312", "py313", "py314"]
+target-version = "py311"
+extend-exclude = ["*.md"]
 
-[tool.isort]
-line_length = 120
-profile = "black"
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "N", "PL", "RUF"]
+ignore = [
+    "PLR0913", # too-many-arguments
+    "PLR0917", # too-many-positional-arguments
+    "PLR0912", # too-many-branches
+    "PLR0915", # too-many-statements
+    "PLR2004", # magic-value-comparison
+    "PLR0904", # too-many-public-methods (matches old pylint config)
+    "RUF001",  # ambiguous-unicode-character-string
+    "RUF002",  # ambiguous-unicode-character-docstring
+    "RUF003",  # ambiguous-unicode-character-comment
+]
 
-[tool.pylint."MESSAGES CONTROL"]
-max-line-length = 120
-disable = ["too-many-public-methods", "broad-exception-caught"]
+[tool.ruff.lint.per-file-ignores]
+# these modules use lazy imports to avoid circular imports and optional win32 dependencies,
+# matching the old `# pylint: disable=import-outside-toplevel` file-level pragmas
+"src/sapsucker/__init__.py" = ["PLC0415"]
+"src/sapsucker/_com.py" = ["PLC0415"]
+"src/sapsucker/login.py" = ["PLC0415"]
+"src/sapsucker/components/application.py" = ["PLC0415"]
+"src/sapsucker/components/base.py" = ["PLC0415"]
+"src/sapsucker/components/connection.py" = ["PLC0415"]
 
 [mypy]
 truethy-bool = true
@@ -85,7 +102,7 @@ tests = [
     "python-dotenv>=1.0",
 ]
 linting = [
-    "pylint==4.0.6",
+    "ruff==0.15.1",
 ]
 type_check = [
     "mypy==2.3.0",
@@ -97,15 +114,10 @@ coverage = [
     "coverage==7.15.2",
     { include-group = "tests" },
 ]
-formatting = [
-    "black==26.5.1",
-    "isort==8.0.1",
-]
 dev = [
     { include-group = "tests" },
     { include-group = "linting" },
     { include-group = "type_check" },
     { include-group = "coverage" },
     { include-group = "spell_check" },
-    { include-group = "formatting" },
 ]
