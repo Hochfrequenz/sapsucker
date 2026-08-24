@@ -102,7 +102,7 @@ tests = [
     "python-dotenv>=1.0",
 ]
 linting = [
-    "ruff==0.15.1",
+    "ruff==0.16.4",
 ]
 type_check = [
     "mypy==2.3.0",
