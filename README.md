@@ -41,7 +41,7 @@ print(session.find_by_id("wnd[0]/sbar").text)
 
 ## Why sapsucker?
 
-- **Read a whole screen in one call** — `dump_tree()` walks any screen recursively and returns typed `ElementInfo`, so you can discover element IDs instead of guessing them
+- **Read a whole screen in one call** — `dump_tree()` walks any screen recursively and returns typed `ElementInfo`, so you can discover element IDs instead of guessing them (one COM round trip on SAP GUI >= 7.70 PL3)
 - **40+ typed wrapper classes** — `GuiGridView.get_cell_value()`, `GuiTree.expand_node()`, not generic `element.read("cell", row, col)`
 - **IDE autocomplete & type hints** on every method and property
 - **430+ unit tests**, 50+ integration tests verified against real SAP S/4 HANA
@@ -66,7 +66,7 @@ pip install sapsucker
 
 Don't know a screen's element IDs? Walk it. `dump_tree()` recurses through every
 child container and returns validated `ElementInfo` objects — id, type, name,
-text, tooltips, accessibility text, geometry and more.
+text, tooltips, accessibility text, geometry and more (`sapsucker.models.ElementInfo`).
 
 ```python
 from sapsucker import SapGui
@@ -81,23 +81,27 @@ def walk(elements, depth=0):
         print("  " * depth, element.id, element.type, element.text)
         walk(element.children, depth + 1)   # ElementInfo nests its children
 
-walk(window.dump_tree())                    # unlimited depth by default
-walk(window.dump_tree(max_depth=2))         # or bound it
+walk(window.dump_tree())                    # full depth by default (safety cap: 200)
+# walk(window.dump_tree(max_depth=2))       # or bound it
 ```
 
-On SAP GUI for Windows >= 7.70 PL3 this uses `GuiSession.GetObjectTree` under the
-hood — the whole subtree in a single COM round trip — and falls back
+On SAP GUI for Windows >= 7.70 PL3 `dump_tree()` uses `GuiSession.GetObjectTree`
+under the hood — the whole subtree in a single COM round trip — and falls back
 automatically to per-property reads on older releases.
 
-Feeding a screen to an LLM? Ask for only the properties you need instead of the
-full element record:
+Feeding a screen to an LLM? Call `GetObjectTree` directly and ask for only the
+properties you need instead of the full element record. Unlike `dump_tree()`,
+this call has no fallback — it raises on SAP GUI older than 7.70 PL3.
 
 ```python
-# Raw JSON, one COM call, only the properties you list
+import json
+
+# A JSON *string*, one COM call, only the properties you list
 raw = session.get_object_tree("wnd[0]", props=["Id", "Type", "Text"])
+tree = json.loads(raw)          # the queried element is tree["children"][0]
 
 # props=None returns Id only — the cheapest possible screen dump
-ids = session.get_object_tree("wnd[0]")
+ids_only_json = session.get_object_tree("wnd[0]")
 ```
 
 ### Read an ALV grid
@@ -196,7 +200,7 @@ and an `asyncio.to_thread()` example.
 
 ## API Overview
 
-| Class             | Description                                               |
+| Class / method    | Description                                               |
 | ----------------- | --------------------------------------------------------- |
 | `SapGui`          | Entry point — `SapGui.connect()` returns `GuiApplication` |
 | `GuiApplication`  | Root object, manages connections                          |
@@ -212,7 +216,7 @@ and an `asyncio.to_thread()` example.
 | `GuiTree`         | Tree control (simple, list, or column)                    |
 | `GuiAbapEditor`   | ABAP source code editor                                   |
 | `GuiStatusbar`    | Status bar at bottom of window                            |
-| `dump_tree()`     | Recursive screen dump on any container → `ElementInfo`    |
+| `dump_tree()`     | On any visual container (`GuiVContainer`) — recursive screen dump to `ElementInfo` |
 
 ## Contributing
 
