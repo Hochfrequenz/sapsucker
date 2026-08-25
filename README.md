@@ -41,6 +41,7 @@ print(session.find_by_id("wnd[0]/sbar").text)
 
 ## Why sapsucker?
 
+- **Read a whole screen in one call** — `dump_tree()` walks any screen recursively and returns typed `ElementInfo`, so you can discover element IDs instead of guessing them
 - **40+ typed wrapper classes** — `GuiGridView.get_cell_value()`, `GuiTree.expand_node()`, not generic `element.read("cell", row, col)`
 - **IDE autocomplete & type hints** on every method and property
 - **430+ unit tests**, 50+ integration tests verified against real SAP S/4 HANA
@@ -61,6 +62,44 @@ pip install sapsucker
 
 ## Usage Examples
 
+### Read an entire screen
+
+Don't know a screen's element IDs? Walk it. `dump_tree()` recurses through every
+child container and returns validated `ElementInfo` objects — id, type, name,
+text, tooltips, accessibility text, geometry and more.
+
+```python
+from sapsucker import SapGui
+
+app = SapGui.connect()
+session = app.connections[0].sessions[0]
+
+window = session.find_by_id("wnd[0]")
+
+def walk(elements, depth=0):
+    for element in elements:
+        print("  " * depth, element.id, element.type, element.text)
+        walk(element.children, depth + 1)   # ElementInfo nests its children
+
+walk(window.dump_tree())                    # unlimited depth by default
+walk(window.dump_tree(max_depth=2))         # or bound it
+```
+
+On SAP GUI for Windows >= 7.70 PL3 this uses `GuiSession.GetObjectTree` under the
+hood — the whole subtree in a single COM round trip — and falls back
+automatically to per-property reads on older releases.
+
+Feeding a screen to an LLM? Ask for only the properties you need instead of the
+full element record:
+
+```python
+# Raw JSON, one COM call, only the properties you list
+raw = session.get_object_tree("wnd[0]", props=["Id", "Type", "Text"])
+
+# props=None returns Id only — the cheapest possible screen dump
+ids = session.get_object_tree("wnd[0]")
+```
+
 ### Read an ALV grid
 
 ```python
@@ -80,7 +119,7 @@ for row in range(grid.row_count):
     print()
 ```
 
-### Navigate a tree
+### Navigate a tree control
 
 ```python
 from sapsucker.components.tree import GuiTree
@@ -173,6 +212,7 @@ and an `asyncio.to_thread()` example.
 | `GuiTree`         | Tree control (simple, list, or column)                    |
 | `GuiAbapEditor`   | ABAP source code editor                                   |
 | `GuiStatusbar`    | Status bar at bottom of window                            |
+| `dump_tree()`     | Recursive screen dump on any container → `ElementInfo`    |
 
 ## Contributing
 
