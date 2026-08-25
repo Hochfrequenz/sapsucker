@@ -41,7 +41,7 @@ print(session.find_by_id("wnd[0]/sbar").text)
 
 ## Why sapsucker?
 
-- **Read a whole screen in one call** — `dump_tree()` walks any screen recursively and returns typed `ElementInfo`, so you can discover element IDs instead of guessing them (one COM round trip on SAP GUI >= 7.70 PL3)
+- **Read a whole screen in one call** — `container.dump_tree()` walks any screen recursively and returns typed `ElementInfo`, so you can discover element IDs instead of guessing them (one COM round trip on SAP GUI >= 7.70 PL3)
 - **40+ typed wrapper classes** — `GuiGridView.get_cell_value()`, `GuiTree.expand_node()`, not generic `element.read("cell", row, col)`
 - **IDE autocomplete & type hints** on every method and property
 - **430+ unit tests**, 50+ integration tests verified against real SAP S/4 HANA
@@ -216,7 +216,7 @@ and an `asyncio.to_thread()` example.
 | `GuiTree`         | Tree control (simple, list, or column)                    |
 | `GuiAbapEditor`   | ABAP source code editor                                   |
 | `GuiStatusbar`    | Status bar at bottom of window                            |
-| `dump_tree()`     | On any visual container (`GuiVContainer`) — recursive screen dump to `ElementInfo` |
+| `.dump_tree()`    | Method on any visual container (`GuiVContainer`) — recursive screen dump, returns `list[ElementInfo]` |
 
 ## Contributing
 
