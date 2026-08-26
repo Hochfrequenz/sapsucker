@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sapsucker.monitor import ABSENT, UNREADABLE, Sample, SessionMonitor, Watch
+from sapsucker.monitor import ABSENT, SCHEMA_VERSION, UNREADABLE, Sample, SessionMonitor, Watch
 
 
 class _Raises:
@@ -293,3 +293,12 @@ class TestRecord:
     def test_sequence_numbers_increment(self):
         session = FakeSession([{"focus": "a"}])
         assert [s.seq for s in _take(SessionMonitor(session, interval=0), 3)] == [0, 1, 2]
+
+
+class TestSchemaVersion:
+    def test_every_record_is_stamped(self):
+        """The JSONL is a contract once anything parses it; a consumer must be able
+        to tell which format a file is in."""
+        session = FakeSession([{"focus": "a"}])
+        record = _take(SessionMonitor(session, interval=0), 1)[0].as_record()
+        assert record["schema_version"] == SCHEMA_VERSION

@@ -78,7 +78,17 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["ABSENT", "UNREADABLE", "Sample", "SessionMonitor", "Watch"]
+__all__ = ["ABSENT", "SCHEMA_VERSION", "UNREADABLE", "Sample", "SessionMonitor", "Watch"]
+
+SCHEMA_VERSION = 1
+"""Version of the emitted sample format.
+
+The JSONL becomes a contract the moment anything parses it — field names,
+sentinel spellings, the ISO-8601 duration encoding. Stamping every record means
+a consumer can detect an old file; adding this after the first consumer has
+locked onto field names would be a breaking change with no way to tell which
+format a given file is in. Bump on any change to the record shape.
+"""
 
 _T = TypeVar("_T")
 
@@ -103,7 +113,11 @@ class Watch(BaseModel):
         examples=["wnd[0]/shellcont/shell", "wnd[1]", "wnd[0]/usr/subA02P01:SAPLBUD0:1130/cmbBUS000FLDS-TITLE_MEDI"],
     )
     prop: str = Field(
-        description="COM property name, PascalCase as the scripting API spells it.",
+        description=(
+            "COM property name, PascalCase as the scripting API spells it. Read with str(), "
+            "so a property returning a COM object rather than a scalar is logged as its repr "
+            "(e.g. '<PyIDispatch...>') with no signal that it differs from a real value."
+        ),
         examples=["FirstVisibleRow", "CurrentCellRow", "Text"],
     )
 
@@ -138,6 +152,11 @@ class Sample(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    schema_version: int = Field(
+        default=SCHEMA_VERSION,
+        description="Version of the record format, so a consumer can detect an older file.",
+        examples=[1],
+    )
     seq: int = Field(description="Zero-based sample counter.", examples=[0, 42])
     at: datetime = Field(
         description="Local-time timestamp of the sample.",
