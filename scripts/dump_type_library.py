@@ -44,16 +44,28 @@ def _kind(invkind: int) -> str:
     return "property(" + "/".join(parts) + ")" if parts else f"unknown({invkind})"
 
 
+# The two stock SAP GUI install locations. Not exhaustive — that is what
+# --typelib is for — so a test that needs the OCX reads this list rather than
+# repeating a guess that could drift from the script's.
+OCX_CANDIDATES = [
+    Path(base) / "sapfewse.ocx"
+    for base in (r"C:\Program Files (x86)\SAP\FrontEnd\SAPgui", r"C:\Program Files\SAP\FrontEnd\SAPgui")
+]
+
+
 def _load_type_lib(explicit: Path | None = None) -> Any:
     """Get the type library, preferring a live scripting engine over a file guess."""
+    if explicit is not None and not explicit.exists():
+        # An explicit path is an instruction, not a hint: fail loudly rather than
+        # falling through to a guess and dumping a different installation's
+        # library. Checked before the pywin32 import so a typo does not surface
+        # as ModuleNotFoundError.
+        raise SystemExit(f"{explicit} does not exist")
+
     import pythoncom  # type: ignore[import-untyped]  # noqa: PLC0415
     import win32com.client  # type: ignore[import-untyped]  # noqa: PLC0415
 
     if explicit is not None:
-        # An explicit path is an instruction, not a hint: fail loudly rather than
-        # falling through to a guess and dumping a different installation's library.
-        if not explicit.exists():
-            raise SystemExit(f"{explicit} does not exist")
         print(f"loading {explicit}", file=sys.stderr)
         return pythoncom.LoadTypeLib(str(explicit))
 
@@ -65,12 +77,7 @@ def _load_type_lib(explicit: Path | None = None) -> Any:
     except Exception as exc:
         print(f"could not reach a running scripting engine ({exc}); trying sapfewse.ocx", file=sys.stderr)
 
-    candidates = [
-        Path(base) / sub / "sapfewse.ocx"
-        for base in (r"C:\Program Files (x86)\SAP\FrontEnd\SAPgui", r"C:\Program Files\SAP\FrontEnd\SAPgui")
-        for sub in (".",)
-    ]
-    for path in candidates:
+    for path in OCX_CANDIDATES:
         if path.exists():
             print(f"loading {path}", file=sys.stderr)
             return pythoncom.LoadTypeLib(str(path))
