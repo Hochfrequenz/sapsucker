@@ -137,6 +137,35 @@ def main() -> int:
     print(f"  raised:    {len(raised)}  first at {raised[0] if raised else '-'}")
     if raised:
         print(f"  example error: {values[raised[0]]}")
+    # Report the actual non-empty RANGES: a single "first blank at N" hides a
+    # second loaded block, and the first run showed 62 non-empty rows when only
+    # 31 were accounted for.
+    ranges, start_run = [], None
+    for i in range(sweep_limit):
+        loaded = values[i] != "" and not values[i].startswith("<raised")
+        if loaded and start_run is None:
+            start_run = i
+        elif not loaded and start_run is not None:
+            ranges.append((start_run, i - 1))
+            start_run = None
+    if start_run is not None:
+        ranges.append((start_run, sweep_limit - 1))
+    print(f"  non-empty ranges: {', '.join(f'{a}-{b}' for a, b in ranges) or '(none)'}")
+    if len(ranges) > 1:
+        print("  -> MORE THAN ONE loaded block. Either another window is cached, or the")
+        print("     reads themselves triggered loading — which a paging loop must handle.")
+
+    # Does a read trigger a load? Read a far row twice and see if it changes.
+    far = min(row_count - 1, sweep_limit + 50)
+    grid.first_visible_row = 0
+    first_try = read(grid, far, column)
+    second_try = read(grid, far, column)
+    print(f"  row {far} read twice without scrolling: {first_try!r} then {second_try!r}")
+    if first_try == "" and second_try != "":
+        print("  -> READS TRIGGER LOADING: a blank is not final; retry before believing it.")
+    elif first_try == "" and second_try == "":
+        print("  -> a blank stays blank; reads do not trigger loading.")
+
     if blanks:
         run_start = blanks[0]
         print(f"  -> blanks begin at row {run_start}; rows 0..{run_start - 1} read fine")
