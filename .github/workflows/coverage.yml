@@ -16,7 +16,17 @@ jobs:
       - name: Install dependencies
         run: uv sync --group coverage
       - name: Run Tests and Record Coverage
+        # scripts/ is coverage tooling, not package code, and is ungated
+        # everywhere else — no ruff, no mypy, no codespell. It only started
+        # being measured here because test_dump_type_library_integration.py
+        # imports it by path to check it against a real SAP GUI. Holding it to
+        # the package threshold would be measuring the wrong thing: its SAP-side
+        # branches are unreachable on a runner with no SAP GUI installed, so it
+        # lands at 16% no matter what anyone writes. Omitted, not measured.
+        #
+        # The job has no matrix and no explicit name:, so its required-check
+        # name is "coverage" and editing this block does not rename it.
         run: |
           uv run coverage run -m pytest
-          uv run coverage html --omit "unittests/*"
-          uv run coverage report --fail-under 90 --omit "unittests/*"
+          uv run coverage html --omit "unittests/*,scripts/*"
+          uv run coverage report --fail-under 90 --omit "unittests/*,scripts/*"
