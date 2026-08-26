@@ -39,3 +39,8 @@ class TestExamples:
         from examples.sapsucker.alv_grid_export import main
 
         main(session=sap_desktop_session)
+
+    def test_screen_introspection(self, sap_desktop_session):
+        from examples.sapsucker.screen_introspection import main
+
+        main(session=sap_desktop_session)
