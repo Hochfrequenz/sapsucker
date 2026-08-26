@@ -49,7 +49,9 @@ The type library also describes the version actually installed, so a "gap" canno
 - **13 coclasses are unmeasured.** No candidate interface (`GuiXxx` → `ISapXxxTarget` / `ISapXxx`) resolved to a non-empty member list for `GuiApplication`, `GuiComponentCollection`, `GuiContainerShell`, `GuiEnum`, `GuiFrameWindow`, `GuiGOSShell`, `GuiSapChart`, `GuiStatusBarLink`, `GuiTabStrip`, `GuiTitlebar`, `GuiUserArea`, `GuiVComponent`, `GuiViewSwitchTarget`. `GuiApplication` and `GuiFrameWindow` matter.
 - **"Not reached" means not reachable *on this class*.** Several names sit in one class's gap list while being wrapped on another. `Click`, `DoubleClick` and `ContextMenu` are gaps on `GuiPicture` (and `ContextMenu` on `GuiCalendar`, `DoubleClick` on `GuiStatusbar`) while all three are wrapped on `GuiGridView` — `src/sapsucker/components/grid.py:97`, `:101`, `:153`. `Entries` and `Selected` are gaps on `GuiComboBoxControl` while being wrapped on `GuiComboBox` (`src/sapsucker/components/combobox.py:57`) and `GuiCheckBox` (`src/sapsucker/components/checkbox.py:16`).
 - **Declared is not working.** A member in the type library may be blocked by read-only scripting mode, unpopulated, or non-functional on a given release.
-- **One installation, one version.**
+- **One installation, one version** — and now it says which. This snapshot is `sapfewse.ocx` file version **8000.1.4.257**, from `C:\Program Files\SAP\FrontEnd\SAPgui\`, type library `SAPFEWSELib` with 161 type infos. Every number below is that installation's.
+
+  Read the raw file version, not a release name: the dump records `sapgui_version` verbatim rather than mapping it to a marketing version, because that mapping is a convention nobody here has verified. Note also that the type library reports its *own* version as `1.0` and has done across releases — it is recorded as `typelib_version` and identifies nothing.
 
 ## Where the large gaps are
 

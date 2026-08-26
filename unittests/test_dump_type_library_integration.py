@@ -251,8 +251,8 @@ def test_why_a_row_falls_back_to_the_bare_interface(ocx: Path, tmp_path: Path) -
 
 @windows_only
 @authorized_only
-def test_the_dump_records_which_library_version_it_is(ocx: Path, tmp_path: Path) -> None:
-    """A snapshot that cannot name its own version invites someone to invent one.
+def test_the_dump_records_which_installation_it_came_from(ocx: Path, tmp_path: Path) -> None:
+    """A snapshot that cannot name its own installation invites someone to invent one.
 
     `docs/coverage-gaps.md` closes on "one installation, one version" while the
     JSON recorded neither, so every number in it was un-attributable to a
