@@ -26,6 +26,15 @@ dependencies = [
 ]
 dynamic = ["readme", "version"]
 
+[project.optional-dependencies]
+# Runtime extra, not a dev group: users install this to get the monitor CLI.
+cli = [
+    "typer>=0.12",
+]
+
+[project.scripts]
+sapsucker-monitor = "sapsucker.monitor_cli:app"
+
 [project.urls]
 Changelog = "https://github.com/Hochfrequenz/sapsucker/releases"
 Homepage = "https://github.com/Hochfrequenz/sapsucker"
@@ -113,6 +122,13 @@ spell_check = [
 coverage = [
     "coverage==7.15.2",
     { include-group = "tests" },
+]
+build_executable = [
+    "pyinstaller==6.16.0",
+    { include-group = "cli_group" },
+]
+cli_group = [
+    "typer>=0.12",
 ]
 dev = [
     { include-group = "tests" },
