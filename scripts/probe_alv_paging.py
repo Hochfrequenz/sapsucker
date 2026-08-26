@@ -83,9 +83,30 @@ def main() -> int:
 
     row_count = int(grid.row_count)
     columns = list(grid.column_order)
-    column = args.column or (columns[0] if columns else "")
-    if not column:
+    if not columns:
         sys.exit("grid reports no columns")
+
+    # A column that is simply empty in this table is indistinguishable from an
+    # unloaded window. Pick one with data at the top, where rows are always
+    # loaded, or refuse to draw conclusions.
+    probe_rows = 5
+    if args.column:
+        candidates = [args.column]
+    else:
+        candidates = columns[:12]
+    chosen = ""
+    for candidate in candidates:
+        grid.first_visible_row = 0
+        if any(read(grid, r, candidate) not in ("", None) for r in range(min(probe_rows, row_count))):
+            chosen = candidate
+            break
+    if not chosen:
+        print(f"\nAll of {candidates[:6]} are empty in the first {probe_rows} rows.")
+        print("Row 0 is always loaded, so an empty result there means an empty COLUMN,")
+        print("not an unloaded window — this run cannot say anything about paging.")
+        print("Re-run naming a column that carries data, e.g. --column PARTNER for BUT000.")
+        return 1
+    column = chosen
 
     visible = "<unavailable>"
     try:
@@ -93,7 +114,7 @@ def main() -> int:
     except Exception as exc:
         visible = f"<raised {type(exc).__name__}: {exc}>"
 
-    print(f"row_count={row_count}  columns={len(columns)}  sampling column={column!r}")
+    print(f"row_count={row_count}  columns={len(columns)}  sampling column={column!r} (has data at the top)")
     print(f"COM VisibleRowCount={visible}   (Q3)")
     if row_count < 50:
         print("\n!! row_count is small — this grid cannot demonstrate the paging problem.")
@@ -135,7 +156,10 @@ def main() -> int:
     print(f"  cell(0)      before scrolling: {row0_at_top!r}")
     print(f"  cell(0)      after  scrolling: {row0_after_scroll!r}")
     print(f"  cell({landed}) after scrolling: {row_landed!r}")
-    if row0_after_scroll == row0_at_top:
+    if row0_at_top == "" and row0_after_scroll == "" and row_landed == "":
+        print("  -> INCONCLUSIVE: every sampled cell is empty, so nothing here")
+        print("     distinguishes absolute from relative indexing.")
+    elif row0_after_scroll == row0_at_top:
         print("  -> ABSOLUTE indexing: index 0 still means the table's first row.")
     elif row0_after_scroll == "":
         print("  -> index 0 went blank after scrolling: absolute indexing, and the")
