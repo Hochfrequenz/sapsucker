@@ -70,13 +70,14 @@ text, tooltips, accessibility text, geometry and more (`sapsucker.models.Element
 
 ```python
 from sapsucker import SapGui
+from sapsucker.models import ElementInfo
 
 app = SapGui.connect()
 session = app.connections[0].sessions[0]
 
 window = session.find_by_id("wnd[0]")
 
-def walk(elements, depth=0):
+def walk(elements: list[ElementInfo], depth: int = 0) -> None:
     for element in elements:
         print("  " * depth, element.id, element.type, element.text)
         walk(element.children, depth + 1)   # ElementInfo nests its children
