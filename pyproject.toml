@@ -105,7 +105,7 @@ linting = [
     "ruff==0.15.1",
 ]
 type_check = [
-    "mypy==2.3.0",
+    "mypy==2.3.1",
 ]
 spell_check = [
     "codespell==2.4.3",
