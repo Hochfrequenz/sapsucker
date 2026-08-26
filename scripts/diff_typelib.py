@@ -51,7 +51,13 @@ def sapsucker_classes() -> dict[str, tuple[set[str], list[str]]]:
     out: dict[str, tuple[set[str], list[str]]] = {}
     for path in SRC.rglob("*.py"):
         src = path.read_text(encoding="utf-8")
-        marks = [(m.group(1), m.group(2), m.start()) for m in re.finditer(r"^class\s+(Gui\w+)\(([^)]*)\)", src, re.M)]
+        # `(...)` optional: GuiComponent and GuiSessionInfo declare no bases, and
+        # skipping them dropped Id/Name/Type/TypeAsNumber/Parent out of every
+        # descendant's flattened set — which then showed up as phantom gaps.
+        marks = [
+            (m.group(1), m.group(2) or "", m.start())
+            for m in re.finditer(r"^class\s+(Gui\w+)(?:\(([^)]*)\))?", src, re.M)
+        ]
         for i, (cls, bases, pos) in enumerate(marks):
             end = marks[i + 1][2] if i + 1 < len(marks) else len(src)
             members = {m.group(1) for m in re.finditer(r"_com\.(\w+)", src[pos:end])}
@@ -79,6 +85,13 @@ def main() -> int:
     types = data["types"]
     ours = sapsucker_classes()
 
+    # The type library flattens inheritance, so every class repeats the
+    # GuiComponent / GuiVComponent / GuiShell surface. Subtract those to leave
+    # each class's own members, which is what a coverage question is about.
+    inherited: set[str] = set()
+    for base_iface in ("ISapComponentTarget", "ISapVContainerTarget", "ISapContainerTarget", "ISapShell"):
+        inherited |= set(types.get(base_iface, {}).get("members", {}))
+
     coclasses = sorted(k for k, v in types.items() if k.startswith("Gui") and not v.get("members"))
     rows, unmapped = [], []
     for cls in coclasses:
@@ -86,11 +99,15 @@ def main() -> int:
         if iface is None:
             unmapped.append(cls)
             continue
-        exposed = {m for m in types[iface]["members"] if m not in COM_NOISE and not m.startswith("_")}
+        exposed = {
+            m for m in types[iface]["members"] if m not in COM_NOISE and not m.startswith("_") and m not in inherited
+        }
         have = flattened(cls, ours)
         missing = sorted(exposed - have)
         rows.append((cls, iface, len(exposed), len(exposed) - len(missing), missing, cls in ours))
 
+    print(f"own members only — the GuiComponent/VComponent/Container/Shell surface is subtracted")
+    print(f"(inherited surface subtracted: {len(inherited)} member names)\n")
     print(f"{'class':24s} {'live':>5s} {'have':>5s} {'gap':>4s}  interface")
     print("-" * 78)
     for cls, iface, n_live, n_have, missing, defined in sorted(rows, key=lambda r: -len(r[4])):
