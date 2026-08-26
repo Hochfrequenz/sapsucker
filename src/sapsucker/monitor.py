@@ -48,9 +48,11 @@ Known limits, by design rather than oversight:
 * **Graceful degradation is unit-tested, not field-tested.** If a read fails the
   values become :data:`UNREADABLE` and sampling continues — but three attempts to
   provoke that against a live session did not manage it. Closing a mode left the
-  proxy valid, and closing SAP GUI puts its own modal in the way, which keeps the
-  session alive while the dialog waits. So the real COM failure mode has not been
-  observed; it is only known that the code handles a raising read.
+  proxy valid, and closing SAP GUI raises its own confirmation dialog, which keeps
+  the session alive while it waits — the log's last sample read
+  ``program=SAPLSPO1`` (SAP's popup program) with real values, 24 s after the
+  close was initiated. So the real COM failure mode has not been observed; it is
+  only known that the code handles a raising read.
 
 Example::
 
