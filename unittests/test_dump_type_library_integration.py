@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -246,3 +247,32 @@ def test_why_a_row_falls_back_to_the_bare_interface(ocx: Path, tmp_path: Path) -
             f"docs/coverage-gaps.md explains {sorted(named)} as fallback rows, but on this "
             f"installation the classes that fell back are {sorted(fell_names)}"
         )
+
+
+@windows_only
+@authorized_only
+def test_the_dump_records_which_library_version_it_is(ocx: Path, tmp_path: Path) -> None:
+    """A snapshot that cannot name its own version invites someone to invent one.
+
+    `docs/coverage-gaps.md` closes on "one installation, one version" while the
+    JSON recorded neither, so every number in it was un-attributable to a
+    release. `GetLibAttr()` is wrapped in the dumper so a failure costs only the
+    version, not the dump — which means a silent `None` would restore exactly
+    the gap this closes. Assert it is really there.
+    """
+    out = tmp_path / "typelib.json"
+    dumped = subprocess.run(
+        [sys.executable, str(SCRIPTS / "dump_type_library.py"), "--typelib", str(ocx), "-o", str(out)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert dumped.returncode == 0, f"incomplete dump (exit {dumped.returncode}):\n{dumped.stderr}"
+
+    library = json.loads(out.read_text(encoding="utf-8"))["library"]
+    version = library.get("version")
+    assert version is not None, f"no version captured; stderr said:\n{dumped.stderr}"
+    # "3.1" style, from TLIBATTR major/minor. A bare "0.0" would be present-but-useless.
+    assert re.fullmatch(r"\d+\.\d+", version), f"unexpected version shape: {version!r}"
+    assert version != "0.0", "version reads 0.0, which carries no information"
+    print(f"\ntype library version: {version}")

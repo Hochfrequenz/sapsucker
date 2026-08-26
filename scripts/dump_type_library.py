@@ -101,7 +101,21 @@ def main() -> int:
     lib = _load_type_lib(args.typelib)
     lib_name, lib_doc = lib.GetDocumentation(-1)[:2]
     count = lib.GetTypeInfoCount()
-    print(f"type library: {lib_name} — {lib_doc} ({count} type infos)", file=sys.stderr)
+
+    # Record which library version this is. docs/coverage-gaps.md carries a
+    # "one installation, one version" caveat that it could not previously
+    # substantiate, because nothing here captured a version — which is an
+    # invitation to guess one. TLIBATTR is (guid, lcid, syskind, major, minor,
+    # flags); wrapped because a failure here must not cost the whole dump.
+    version: str | None = None
+    try:
+        attr = lib.GetLibAttr()
+        version = f"{attr[3]}.{attr[4]}"
+    except Exception as exc:  # noqa: BLE001
+        print(f"could not read the library version ({exc})", file=sys.stderr)
+
+    shown = f" v{version}" if version else " (version unavailable)"
+    print(f"type library: {lib_name}{shown} — {lib_doc} ({count} type infos)", file=sys.stderr)
 
     types: dict[str, Any] = {}
     # A dropped member is a member diff_typelib.py then counts as NOT exposed, so
@@ -142,7 +156,7 @@ def main() -> int:
             types[name]["dropped"] = lost
             dropped[name] = lost
 
-    payload = {"library": {"name": lib_name, "doc": lib_doc}, "types": types}
+    payload = {"library": {"name": lib_name, "doc": lib_doc, "version": version}, "types": types}
     args.out.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
 
     with_members = {k: v for k, v in types.items() if v.get("members")}

@@ -79,7 +79,9 @@ GuiPasswordField            20     6   14  ISapPasswordField *
 
 **Observed, from that run:** the three classes resolved to differently-named interfaces — one `*Target`, two bare — and a subclass reports fewer members than its parent. Those rows are therefore not comparable with each other, whatever the cause.
 
-**The cause, and how far it is established.** `interface_candidates()` tries `ISap<Name>Target` first and falls through to the bare `ISap<Name>`, so the reading is that neither subclass has a `*Target` variant carrying members. That is inferred from the resolution order and the output, not read off the type library — so it is asserted by `test_why_a_row_falls_back_to_the_bare_interface`, which checks against the live library that every class the report marks really does have an absent or memberless first choice. Until that test has run on a machine with SAP GUI, treat the mechanism as the likely explanation rather than an established one; the row-level warning above does not depend on it.
+**The cause, checked against the live library.** `interface_candidates()` tries `ISap<Name>Target` first and falls through to the bare `ISap<Name>`. That the subclasses have no usable `*Target` variant is not inferred from the report — `test_why_a_row_falls_back_to_the_bare_interface` asserts it against the type library itself: for every class the report marks, the first-choice candidate must be absent or carry no members, and `GuiCTextField` and `GuiPasswordField` must actually be in that set. It passes against the installation this snapshot was taken from (`SAPFEWSELib`, 161 type infos).
+
+If a future release gives either class a populated `ISap<Name>Target`, that test fails and names it, and this paragraph is then wrong rather than quietly stale.
 
 The numbers are therefore not so much wrong as **not comparable**, and the "restated row" claim was wrong for a reason that had nothing to do with the guide. The two classes stay out of the table, now for the right reason: including them invites exactly the parent-versus-subclass reading that does not hold.
 
