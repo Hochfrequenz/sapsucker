@@ -87,6 +87,53 @@ def _load_type_lib(explicit: Path | None = None) -> Any:
     )
 
 
+def _provenance(lib: Any, explicit: Path | None) -> dict[str, str | None]:
+    """Identify which SAP GUI this dump came from.
+
+    ``GetLibAttr()`` reports the *type library's* own version, which is 1.0 and
+    stays 1.0 across SAP GUI releases — it says nothing about the installation,
+    so recording it alone leaves a snapshot un-attributable while looking as
+    though it carries a version. The release comes from the OCX's file-version
+    resource, or from the running scripting engine.
+
+    Every read is individually guarded: none of this is worth losing a dump
+    over, and an absent value must read as absent rather than as a default.
+    """
+    out: dict[str, str | None] = {"typelib_version": None, "sapgui_version": None, "source": None}
+
+    try:
+        attr = lib.GetLibAttr()
+        out["typelib_version"] = f"{attr[3]}.{attr[4]}"
+    except Exception as exc:  # noqa: BLE001
+        print(f"could not read TLIBATTR ({exc})", file=sys.stderr)
+
+    ocx = explicit if explicit is not None else next((c for c in OCX_CANDIDATES if c.exists()), None)
+    if ocx is not None:
+        out["source"] = str(ocx)
+        try:
+            import win32api  # type: ignore[import-untyped]  # noqa: PLC0415
+
+            info = win32api.GetFileVersionInfo(str(ocx), "\\")
+            ms, ls = info["FileVersionMS"], info["FileVersionLS"]
+            out["sapgui_version"] = f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+        except Exception as exc:  # noqa: BLE001
+            print(f"could not read {ocx} file version ({exc})", file=sys.stderr)
+
+    if out["sapgui_version"] is None:
+        # No OCX in hand, or its resource was unreadable: ask a live engine.
+        try:
+            import win32com.client  # type: ignore[import-untyped]  # noqa: PLC0415
+
+            engine = win32com.client.GetObject("SAPGUI").GetScriptingEngine
+            parts = [str(getattr(engine, n)) for n in ("MajorVersion", "MinorVersion", "Revision", "Patchlevel")]
+            out["sapgui_version"] = ".".join(parts)
+            out["source"] = out["source"] or "running scripting engine"
+        except Exception as exc:  # noqa: BLE001
+            print(f"could not read a version from a running engine ({exc})", file=sys.stderr)
+
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-o", "--out", default="typelib.json", type=Path)
@@ -102,20 +149,16 @@ def main() -> int:
     lib_name, lib_doc = lib.GetDocumentation(-1)[:2]
     count = lib.GetTypeInfoCount()
 
-    # Record which library version this is. docs/coverage-gaps.md carries a
-    # "one installation, one version" caveat that it could not previously
-    # substantiate, because nothing here captured a version — which is an
-    # invitation to guess one. TLIBATTR is (guid, lcid, syskind, major, minor,
-    # flags); wrapped because a failure here must not cost the whole dump.
-    version: str | None = None
-    try:
-        attr = lib.GetLibAttr()
-        version = f"{attr[3]}.{attr[4]}"
-    except Exception as exc:  # noqa: BLE001
-        print(f"could not read the library version ({exc})", file=sys.stderr)
-
-    shown = f" v{version}" if version else " (version unavailable)"
-    print(f"type library: {lib_name}{shown} — {lib_doc} ({count} type infos)", file=sys.stderr)
+    provenance = _provenance(lib, args.typelib)
+    tl = provenance["typelib_version"]
+    sg = provenance["sapgui_version"]
+    print(
+        f"type library: {lib_name} — {lib_doc} ({count} type infos)"
+        f"\n  typelib version: {tl or 'unavailable'} (constant across releases; does not identify one)"
+        f"\n  SAP GUI:         {sg or 'UNKNOWN — this dump cannot be attributed to a release'}"
+        f"\n  source:          {provenance['source'] or 'unknown'}",
+        file=sys.stderr,
+    )
 
     types: dict[str, Any] = {}
     # A dropped member is a member diff_typelib.py then counts as NOT exposed, so
@@ -156,7 +199,7 @@ def main() -> int:
             types[name]["dropped"] = lost
             dropped[name] = lost
 
-    payload = {"library": {"name": lib_name, "doc": lib_doc, "version": version}, "types": types}
+    payload = {"library": {"name": lib_name, "doc": lib_doc, **provenance}, "types": types}
     args.out.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
 
     with_members = {k: v for k, v in types.items() if v.get("members")}

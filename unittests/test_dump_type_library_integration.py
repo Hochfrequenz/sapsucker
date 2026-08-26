@@ -270,11 +270,19 @@ def test_the_dump_records_which_library_version_it_is(ocx: Path, tmp_path: Path)
     assert dumped.returncode == 0, f"incomplete dump (exit {dumped.returncode}):\n{dumped.stderr}"
 
     library = json.loads(out.read_text(encoding="utf-8"))["library"]
-    version = library.get("version")
-    assert version is not None, f"no version captured; stderr said:\n{dumped.stderr}"
-    # "3.1" style, from TLIBATTR major/minor. A bare "0.0" would be present-but-useless.
-    assert re.fullmatch(r"\d+\.\d+", version), f"unexpected version shape: {version!r}"
-    assert version != "0.0", "version reads 0.0, which carries no information"
+
+    # The one that identifies the installation. TLIBATTR's version is NOT it:
+    # it reads 1.0 and stays 1.0 across SAP GUI releases, so asserting on it
+    # would pass while leaving the snapshot un-attributable — a green check over
+    # the exact gap it was added to close.
+    sapgui = library.get("sapgui_version")
+    assert sapgui is not None, f"no SAP GUI version captured; stderr said:\n{dumped.stderr}"
+    assert re.fullmatch(r"\d+(\.\d+)+", sapgui), f"unexpected SAP GUI version shape: {sapgui!r}"
+    assert set(sapgui) - {".", "0"}, f"SAP GUI version is all zeros ({sapgui!r}), which identifies nothing"
+    assert library.get("source"), "no source recorded, so the version cannot be traced to a file or engine"
+
+    # Recorded, but explicitly not trusted to identify anything.
+    assert library.get("typelib_version") is not None, "TLIBATTR version missing entirely"
     # Deliberately not printed here: pytest swallows stdout from a passing test
     # unless -s is given, so a print would look like a way to read the version
     # and silently not be one. The dumper writes it to stderr in its header —
