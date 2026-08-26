@@ -24,12 +24,16 @@ types the dump recorded as errors. Neither script treats a silent partial
 success as success.
 
 The pair is checked against a real installation by
-`unittests/test_dump_type_library_integration.py`, which skips off a machine
-with SAP GUI:
+`unittests/test_dump_type_library_integration.py`. Its SAP-side tests run only
+on Windows with SAP GUI installed, and skip everywhere else — no session and no
+login needed, since the type library is static:
 
 ```bash
 uv run pytest unittests/test_dump_type_library_integration.py -rs -v
 ```
+
+`-rs` is not optional. A skipped test reads as a pass in the summary line, so if
+those tests report `skipped` rather than `passed`, nothing about SAP was checked.
 
 ## Why the type library rather than the PDF
 
