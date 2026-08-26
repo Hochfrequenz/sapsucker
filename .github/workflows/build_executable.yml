@@ -1,0 +1,88 @@
+name: Build Executable
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [created]
+
+jobs:
+  build:
+    # Windows only: SAP GUI Scripting is a Windows COM API.
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.14"
+
+      - name: Build Executable
+        run: uv run --locked --group build_executable pyinstaller --noconfirm sapsucker_monitor_windows.spec
+
+      - name: Freeze build dependencies
+        run: uv pip freeze > dist/build-dependencies.txt
+
+      - name: Upload Executable as Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sapsucker_monitor_windows
+          path: |
+            dist/sapsucker_monitor_windows.exe
+            dist/build-dependencies.txt
+
+  smoke_test:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.14"
+
+      - name: Download Executable
+        uses: actions/download-artifact@v8
+        with:
+          name: sapsucker_monitor_windows
+          path: dist
+
+      # A runner has no SAP GUI, so COM cannot be exercised. What this does
+      # cover is that the binary starts, that argument validation happens before
+      # any COM work, and that a missing SAP GUI produces a diagnostic rather
+      # than a traceback — which is a path that has regressed before.
+      - name: Smoke Test
+        run: uv run --no-project --python 3.14 python unittests/smoke_test_exe.py dist/sapsucker_monitor_windows.exe
+
+  release:
+    needs: [build, smoke_test]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Executable
+        uses: actions/download-artifact@v8
+        with:
+          name: sapsucker_monitor_windows
+          path: dist/windows
+
+      - name: Rename Executable with version
+        run: |
+          set -eu
+          mkdir -p dist/release
+          mv ./dist/windows/sapsucker_monitor_windows.exe \
+             ./dist/release/sapsucker_monitor_windows_${{ github.ref_name }}.exe
+          ls -la dist/release/
+
+      - name: Upload Executable to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ./dist/release/sapsucker_monitor_windows_${{ github.ref_name }}.exe
+          fail_on_unmatched_files: true
