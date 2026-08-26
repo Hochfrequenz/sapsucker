@@ -34,6 +34,7 @@ jobs:
               uv run codespell --ignore-words=domain-specific-terms.txt src
               uv run codespell --ignore-words=domain-specific-terms.txt examples
               uv run codespell --ignore-words=domain-specific-terms.txt README.md
+              uv run codespell --ignore-words=domain-specific-terms.txt AGENTS.md
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
