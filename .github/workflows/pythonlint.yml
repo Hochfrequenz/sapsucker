@@ -6,7 +6,18 @@ on:
   pull_request: {}
 jobs:
   lint:
-    name: Python Code Quality and Lint
+    # Name pinned to matrix.group ONLY. A `name` that does not reference the matrix
+    # gets every matrix value appended — including the multi-line `commands` — and is
+    # cut at 100 characters. Measured on a green commit, the linting leg reported as
+    # "Python Code Quality and Lint (linting, uv run ruff check src/sapsucker examples\n)"
+    # (81 chars, newline before the paren, not truncated) and the other two as 100-char
+    # truncations ending in "...". None match the "Python Code Quality and Lint (<group>)"
+    # contexts the branch ruleset requires, and they change whenever a command is edited.
+    # Referencing the matrix in the name suppresses the appending — see formatting.yml,
+    # which reports as exactly "format (black)". For the cause, compare
+    # codeql-analysis.yml: `name: Analyze` over a `language` matrix reports as
+    # "Analyze (python)" precisely because its name references no matrix key.
+    name: "Python Code Quality and Lint (${{ matrix.group }})"
     runs-on: ubuntu-latest
     strategy:
       matrix:
