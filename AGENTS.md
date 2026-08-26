@@ -23,7 +23,7 @@ A human has to do this, so make it a copy-paste block including the git steps. N
 git fetch origin
 git checkout <branch>
 git pull
-uv sync --group tests --group cli_group
+uv sync              # add --group tests only if the run is a pytest integration test
 uv run python scripts/<script>.py -o out.json
 ```
 
@@ -33,7 +33,7 @@ State what output you need and what would count as a failure, so the run is not 
 
 When the question is "does this member exist", the SAP GUI Scripting API guide and the installed type library can disagree, and the library wins for the version in use. `scripts/dump_type_library.py` and `scripts/diff_typelib.py` exist for this; see [`docs/coverage-gaps.md`](docs/coverage-gaps.md). All three land in #97, so this file must not merge before it or these become dead links.
 
-This is not hypothetical. A documentation-based pass once produced a finding that `GuiToolbar` was missing twelve methods, seven of them `GetButton*`. The type library shows `ISapToolbarTarget` exposes no own members at all — the guide documents all twelve on `GuiToolbarControl`, where sapsucker already wraps eleven of them, every `GetButton*` included (`src/sapsucker/components/shell.py:104`–`:144`). Filing that would have been a wrong issue about members the package already had.
+This is not hypothetical. A documentation-based pass once produced a finding that `GuiToolbar` was missing twelve methods, seven of them `GetButton*`. The type library shows `ISapToolbarTarget` exposes no own members at all — the guide documents all twelve on `GuiToolbarControl`, where sapsucker already wraps eleven of them, every `GetButton*` included (`src/sapsucker/components/shell.py:102`–`:144`). Filing that would have been a wrong issue about members the package already had.
 
 ### Record what could not be verified
 
@@ -59,7 +59,9 @@ The first two were caught by deliberately mutating the code, not by the suite. T
 
 Run each one and read its exit code individually. Chaining them hides failures behind the last command's status — three `codespell` calls chained once hid a failure in `src`.
 
-`pyproject.toml` sets `default-groups = []`, so a fresh checkout has no dev tooling installed. The three `ruff` lines happen to work anyway; `codespell`, `mypy` and `pytest` die with `Failed to spawn: <tool>` — which is a *setup* failure that looks nothing like a gate failure, and is easy to skim past when six of ten lines error identically. `README.md` gets this right and this file used not to. Sync first:
+`pyproject.toml` sets `default-groups = []`, so on a fresh checkout every one of the ten lines below dies with `Failed to spawn: <tool>` — a *setup* failure that looks nothing like a gate failure, and easy to skim past when ten lines error identically.
+
+`uv run ruff` can look like the exception, because a machine with a global `uv tool install ruff` finds that one on `PATH`. That is the wrong ruff: this repo pins `ruff==0.16.4`, the global copy on the machine where this was written is `0.16.2`, and linting against a version CI does not use is worse than the tool being missing. An earlier revision of this file asserted ruff needed no sync, on exactly that evidence. `README.md` gets this right. Sync first:
 
 ```bash
 uv sync --group dev   # dev includes tests, linting, type_check, coverage, spell_check
@@ -76,14 +78,28 @@ uv run mypy --show-error-codes examples/sapsucker --strict --ignore-missing-impo
 uv run pytest
 ```
 
-That is ten commands — four `codespell` invocations and two `mypy` invocations, not one each. Then an eleventh, `coverage`, which is a required check and the one that can fail on a PR where all ten above pass: add uncovered code and `pytest` stays green.
+That is ten commands — four `codespell` invocations and two `mypy` invocations, not one each. Two more make up the eleventh gate, `coverage`, which is required and is the one of these that can fail with all ten above green: add uncovered code and `pytest` still passes.
 
 ```bash
 uv run coverage run -m pytest
 uv run coverage report --fail-under 90 --omit "unittests/*,scripts/*"
 ```
 
-`scripts/` is omitted because it is tooling rather than package code and is ungated everywhere else; its SAP-side branches are unreachable on a runner, so measuring it would report on CI's environment rather than on the code.
+`scripts/` is omitted because it is tooling rather than package code and is ungated everywhere else; its SAP-side branches are unreachable on a runner, so measuring it would report on CI's environment rather than on the code. (The `scripts/*` half of that omit lands in #97 alongside the scripts themselves — a second reason this file must not merge first.)
+
+**Two more required checks have no command in the list above at all**, so a green local run is not the same as a green PR:
+
+- `bom-check` fails on any tracked file carrying a UTF-8 byte-order mark. This is not hypothetical for text: issue #41's May comment body starts with a U+FEFF. The obvious check does **not** work — GNU `grep` skips a leading BOM, so `grep -lP '^\xef\xbb\xbf'` reports clean on a file that has one. Read the bytes instead:
+
+  ```bash
+  git ls-files -z | xargs -0 python3 -c \
+    "import sys,pathlib; [print(f) for f in sys.argv[1:] if pathlib.Path(f).read_bytes().startswith(b'\xef\xbb\xbf')]"
+  ```
+
+  It must print nothing.
+- `check (3.11|3.12|3.13, windows-latest)` is `dev_test.yml` proving `uv sync --group dev` resolves — which the sync at the top of this section already exercises.
+
+Fourteen contexts are required in total; the four `pytest (3.x, windows-latest)` legs are the `uv run pytest` line above, run per Python version on Windows.
 
 Note `mypy --strict` needs the optional CLI dependency present, so `type_check` includes it — an absent dependency reports as `import-not-found` plus `untyped-decorator` rather than as a missing extra.
 
@@ -105,19 +121,19 @@ Examples in `README.md` and in docstrings are the package's most-read surface, a
 
 Nothing here is optional, and none of it was invented in the abstract — each rule is a thing that shipped wrong once.
 
-**Every PR: draft → round 1 → fix → round 2 → Copilot → fix → all gates green → CI green → mark ready.** Exactly two internal rounds. Round 2 is terminal, and the reviewer's job there is to *suggest fixes*, not only to report blockers — a round that ends in a list of concerns nobody acted on has cost time and changed nothing. Re-review after any substantial later edit; the rule is per change, not per PR.
+**Every change: draft → round 1 → fix → round 2 → Copilot → fix → all gates green → CI green → mark ready.** Two internal rounds per *change*, not per PR: round 2 is terminal for the diff it reviewed, and a substantial edit afterwards — including one made in response to Copilot — is a new change that starts again at round 1. Round 2's reviewer must *suggest fixes*, not only report blockers; a round that ends in a list of concerns nobody acted on has cost time and changed nothing.
 
 **Keep PRs small.** Two rounds over a large diff finds less than two rounds over a small one, and the second round is the one that catches the subtle thing.
 
-**Fact-check prose before posting it.** Issue and PR bodies are the record other people act on, so they get the same scrutiny as code, from a reviewer that did not write them. This is not theoretical: four published claims in one session were wrong, including a paging loop that never scrolled and — after the fix — a second loop whose termination condition permitted an infinite loop.
+**Fact-check prose before posting it.** Issue and PR bodies are the record other people act on, so they get the same scrutiny as code, from a reviewer that did not write them. This is not theoretical. One session on #91 published a paging loop that never scrolled — it incremented a local instead of writing back to the grid — and the correction that replaced it read `previous_start` in its break condition before ever assigning it, a `NameError` on the first iteration. (Its `start <= previous_start` guard was right, and is what makes an infinite loop impossible; an earlier revision of *this* file said the opposite.) The correcting comment's own heading said "four things need fixing" and then listed five.
 
 **Correct published text in place** (`gh issue edit N --body-file`, `gh pr edit N --body-file`). Never append a correcting comment: a reader who stops at the body gets the wrong version, and the thread ends up reading as two unreconciled arguments.
 
-**Read an issue's whole comment history before commenting on it.** Adding a third position to a question that already has two is how #41 got into its current state.
+**Read an issue's whole comment history before commenting on it.** #41 had a May comment arguing for removal; a comment three months later argued for implementation without engaging it, and it took a third comment to reconcile two positions that never needed to conflict.
 
 **Copilot findings get a reply and a resolve, false positives included.** Silent dismissal loses the reasoning, and the next person re-litigates it. Poll Copilot by `commit_id`, not by review count — a force-push leaves a stale review attached to the old SHA, so a review can exist while none of it applies to head.
 
-**Verify provenance before asserting it** (`git log -S<symbol>`). "This was added because a journey needed it" has been claimed twice and been false twice; both were in the initial bulk wrap.
+**Verify provenance before asserting it** (`git log -S<symbol>`). #41 asserts that "`press_f4` got wrapped because a real journey needed it"; `git log -S press_f4 --all` returns only `4ee5842`, the initial bulk wrap, so it was there before any journey was recorded. The same claim reached PR #97's body before being caught.
 
 **Name examples, never bare aggregates.** "Three components are affected" is unfalsifiable and has been wrong; "`GuiComboBox`, `GuiGridView` and `GuiStatusbar`" can be checked.
 
