@@ -275,4 +275,8 @@ def test_the_dump_records_which_library_version_it_is(ocx: Path, tmp_path: Path)
     # "3.1" style, from TLIBATTR major/minor. A bare "0.0" would be present-but-useless.
     assert re.fullmatch(r"\d+\.\d+", version), f"unexpected version shape: {version!r}"
     assert version != "0.0", "version reads 0.0, which carries no information"
-    print(f"\ntype library version: {version}")
+    # Deliberately not printed here: pytest swallows stdout from a passing test
+    # unless -s is given, so a print would look like a way to read the version
+    # and silently not be one. The dumper writes it to stderr in its header —
+    # `uv run python scripts/dump_type_library.py -o typelib.json` — and it is
+    # in the JSON at library.version. This test only guards that it is there.
