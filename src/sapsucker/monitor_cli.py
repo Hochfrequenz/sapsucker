@@ -19,7 +19,7 @@ import typer
 
 from sapsucker import SapGui
 from sapsucker._errors import SapConnectionError, ScriptingDisabledError
-from sapsucker.monitor import UNREADABLE, SessionMonitor, Watch
+from sapsucker.monitor import ABSENT, UNREADABLE, SessionMonitor, Watch
 
 app = typer.Typer(
     add_completion=False,
@@ -128,7 +128,12 @@ def main(
         probe = monitor.read_once()
         for w in watches:
             value = probe.get(w.key)
-            hint = "  (unreadable now — check the property name)" if value == UNREADABLE else ""
+            if value == UNREADABLE:
+                hint = "  (unreadable — check the property name)"
+            elif value == ABSENT:
+                hint = "  (not on the current screen — fine if you navigate to it later)"
+            else:
+                hint = ""
             typer.echo(f"watching: {w.element_id} .{w.prop} = {value}{hint}")
 
     if out.exists():
