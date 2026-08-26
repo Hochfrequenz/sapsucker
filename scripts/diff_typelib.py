@@ -134,24 +134,33 @@ def main() -> int:
     )
     rows, unmapped = [], []
     for cls in coclasses:
-        iface = next((c for c in interface_candidates(cls) if types.get(c, {}).get("members")), None)
+        candidates = interface_candidates(cls)
+        iface = next((c for c in candidates if types.get(c, {}).get("members")), None)
         if iface is None:
             unmapped.append(cls)
             continue
+        # Falling through to a later candidate is not a detail. GuiTextField
+        # resolves to ISapTextFieldTarget (23 members) while GuiCTextField and
+        # GuiPasswordField fall through to ISapCTextField / ISapPasswordField
+        # (20 each) — different kinds of interface, so those rows are not
+        # comparable with the ones above them, and a subclass appears to expose
+        # FEWER members than its parent. Silently, until this flag existed.
+        fellback = iface != candidates[0]
         exposed = {
             m for m in types[iface]["members"] if m not in COM_NOISE and not m.startswith("_") and m not in inherited
         }
         have = flattened(cls, ours)
         missing = sorted(exposed - have)
-        rows.append((cls, iface, len(exposed), len(exposed) - len(missing), missing, cls in ours))
+        rows.append((cls, iface, len(exposed), len(exposed) - len(missing), missing, cls in ours, fellback))
 
     print("own members only — the GuiComponent/VContainer/Container/Shell surface is subtracted")
     print(f"(inherited surface subtracted: {len(inherited)} member name(s))\n")
     print(f"{'class':24s} {'live':>5s} {'have':>5s} {'gap':>4s}  interface")
     print("-" * 78)
-    for cls, iface, n_live, n_have, missing, defined in sorted(rows, key=lambda r: -len(r[4])):
+    for cls, iface, n_live, n_have, missing, defined, fellback in sorted(rows, key=lambda r: -len(r[4])):
         flag = "" if defined else "  [not defined in sapsucker]"
-        print(f"{cls:24s} {n_live:5d} {n_have:5d} {len(missing):4d}  {iface}{flag}")
+        mark = " *" if fellback else ""
+        print(f"{cls:24s} {n_live:5d} {n_have:5d} {len(missing):4d}  {iface}{mark}{flag}")
 
     print("\n=== full gap lists for classes of interest ===")
     interest = [
@@ -166,7 +175,7 @@ def main() -> int:
         "GuiGridView",
     ]
     measured = {cls for cls, *_ in rows}
-    for cls, iface, _n_live, _n_have, missing, _d in rows:
+    for cls, iface, _n_live, _n_have, missing, _d, _f in rows:
         if cls in interest:
             print(f"\n{cls}  ({iface})  {len(missing)} not reached:")
             print("  " + ", ".join(missing) if missing else "  (none)")
@@ -176,6 +185,16 @@ def main() -> int:
             # as "no gaps". GuiToolbar is exactly this case — no interface of its
             # own matched, so nothing was measured.
             print(f"\n{cls}  NOT MEASURED — no interface matched, so this is not a report of zero gaps")
+
+    fell = sorted(cls for cls, _i, _l, _h, _m, _d, f in rows if f)
+    if fell:
+        print(
+            f"\n=== * {len(fell)} class(es) did not resolve to their first-choice ISap<Name>Target "
+            f"interface and fell through to a later candidate: {', '.join(fell)}"
+        )
+        print("    Those rows measure a DIFFERENT KIND of interface from the unmarked ones, so their")
+        print("    'live' counts are not comparable — a subclass can appear to expose fewer members")
+        print("    than its parent. Do not read a marked row against an unmarked one.")
 
     if errored:
         print(f"\n=== Gui* types the dump could not read, so not compared: {', '.join(errored)}")

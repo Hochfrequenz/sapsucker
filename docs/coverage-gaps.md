@@ -44,7 +44,7 @@ The type library also describes the version actually installed, so a "gap" canno
 ## Caveats — read before using any number here
 
 - **"Reached" means *touched*, not *properly exposed*.** The diff finds `_com.<Name>` by regex within each class's text region, unioned over its Python bases. It matches the COM name, so a wrapper named differently still counts (`set_cell_value` → `ModifyCell`, `src/sapsucker/components/grid.py:81`) — correct, but it means "reached" says nothing about the Python-side API. It genuinely over-credits where module-level code sits inside a class's text region, which **inflates coverage**. The subtraction below errs in the opposite direction.
-- **Only four base interfaces are subtracted**, so a class extending another *wrapped* class reports its parent's surface as its own: `GuiCTextField` and `GuiPasswordField` report `GuiTextField`'s 20, `GuiMainWindow` (27) and `GuiModalWindow` (23) report `GuiFrameWindow`'s. This **overstates the gap**.
+- **Only four base interfaces are subtracted**, so a class extending another *wrapped* class reports its parent's surface as its own — `GuiMainWindow` (27) and `GuiModalWindow` (23) carry `GuiFrameWindow`'s. This **overstates the gap**. (`GuiCTextField` and `GuiPasswordField` were listed here as reporting "`GuiTextField`'s 20"; that was wrong twice over. `GuiTextField` reports 23, not 20, and the 20 comes from resolving to a different interface entirely — see below.)
 - **Own-member counts are approximate.** An inherited surface of 43 names, taken from four base interfaces, is subtracted so each class shows its own members. A class that legitimately redeclares an inherited member is under-counted.
 - **13 coclasses are unmeasured.** No candidate interface (`GuiXxx` → `ISapXxxTarget` / `ISapXxx`) resolved to a non-empty member list for `GuiApplication`, `GuiComponentCollection`, `GuiContainerShell`, `GuiEnum`, `GuiFrameWindow`, `GuiGOSShell`, `GuiSapChart`, `GuiStatusBarLink`, `GuiTabStrip`, `GuiTitlebar`, `GuiUserArea`, `GuiVComponent`, `GuiViewSwitchTarget`. `GuiApplication` and `GuiFrameWindow` matter.
 - **"Not reached" means not reachable *on this class*.** Several names sit in one class's gap list while being wrapped on another. `Click`, `DoubleClick` and `ContextMenu` are gaps on `GuiPicture` (and `ContextMenu` on `GuiCalendar`, `DoubleClick` on `GuiStatusbar`) while all three are wrapped on `GuiGridView` — `src/sapsucker/components/grid.py:97`, `:101`, `:153`. `Entries` and `Selected` are gaps on `GuiComboBoxControl` while being wrapped on `GuiComboBox` (`src/sapsucker/components/combobox.py:57`) and `GuiCheckBox` (`src/sapsucker/components/checkbox.py:16`).
@@ -69,9 +69,19 @@ Own members, reached / total:
 | `GuiRadioButton` | 3 | 14 | |
 | `GuiStatusbar` | 1 | 9 | includes the message fields — see #90 |
 
-`GuiCTextField` and `GuiPasswordField` are absent from the table, and **one number behind that decision does not add up.** The guide says they add no members of their own to `GuiTextField` (§1.2.20, §1.2.43), and their wrapper bodies are empty (`src/sapsucker/components/field.py:56`, `:60`), so all three classes reach the identical member set and their rows should be identical. They are not: the tool reported 6/20 for the two subclasses against 7/23 for `GuiTextField` above. A flattened dispinterface for a subclass cannot expose *fewer* members than its parent's, so one of two things is true — the 6/20 is stale, or `interface_candidates()` resolved these classes to a different or partial interface, in which case the same silent mis-resolution could be understating other rows in the table.
+`GuiCTextField` and `GuiPasswordField` are absent from the table, and the reason turned out not to be the one first given. The original draft said their rows were "the `GuiTextField` row restated". They are not — the tool reports:
 
-Unresolved, and not resolvable off the Windows box. The next dump settles it: `diff_typelib.py` prints the interface it picked in the last column of every row, so compare the interface names for `GuiTextField`, `GuiCTextField` and `GuiPasswordField`. Do not cite these two classes' numbers in #41/#88/#90 until then.
+```
+GuiTextField                23     7   16  ISapTextFieldTarget
+GuiCTextField               20     6   14  ISapCTextField *
+GuiPasswordField            20     6   14  ISapPasswordField *
+```
+
+**Those three rows measure different kinds of interface.** `GuiTextField` resolves to the `ISap<Name>Target` dispinterface; the two subclasses have no `*Target` variant carrying members, so `interface_candidates()` falls through to the bare `ISap<Name>`, which exposes a smaller surface. That is why a subclass appears to expose *fewer* members than its parent — impossible for a flattened interface, and the signal that the comparison was never apples-to-apples.
+
+The numbers are therefore not so much wrong as **not comparable**, and the "restated row" claim was wrong for a reason that had nothing to do with the guide. The two classes stay out of the table, now for the right reason: including them invites exactly the parent-versus-subclass reading that does not hold.
+
+`diff_typelib.py` now marks any fallback row with `*` and prints what the mark means, because nothing in the output previously distinguished a first-choice resolution from a fallback. Read a marked row only against other marked rows.
 
 `GuiGridView` has the largest gap among classes in active consumer use, but it is not alone: `GuiSession`, `GuiTextField`, `GuiComboBox` and `GuiStatusbar` are all in this table and all four are exercised by the reconstruction in `docs/spike/`. #88 and #90 are gaps in two of them.
 
