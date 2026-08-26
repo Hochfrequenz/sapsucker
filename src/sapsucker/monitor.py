@@ -45,6 +45,12 @@ Known limits, by design rather than oversight:
   inside one modal collapse into one transition.
 * **Same-titled chained dialogs are indistinguishable**, so popup counts stay
   ambiguous.
+* **Graceful degradation is unit-tested, not field-tested.** If a read fails the
+  values become :data:`UNREADABLE` and sampling continues — but three attempts to
+  provoke that against a live session did not manage it. Closing a mode left the
+  proxy valid, and closing SAP GUI puts its own modal in the way, which keeps the
+  session alive while the dialog waits. So the real COM failure mode has not been
+  observed; it is only known that the code handles a raising read.
 
 Example::
 
