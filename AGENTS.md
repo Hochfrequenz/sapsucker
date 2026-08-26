@@ -31,7 +31,7 @@ State what output you need and what would count as a failure, so the run is not 
 
 ### Prefer the type library to the documentation
 
-When the question is "does this member exist", the SAP GUI Scripting API guide and the installed type library can disagree, and the library wins for the version in use. `scripts/dump_type_library.py` and `scripts/diff_typelib.py` exist for this; see [`docs/coverage-gaps.md`](docs/coverage-gaps.md). All three land in #97, so this file must not merge before it or these become dead links.
+When the question is "does this member exist", the SAP GUI Scripting API guide and the installed type library can disagree, and the library wins for the version in use. `scripts/dump_type_library.py` and `scripts/diff_typelib.py` exist for this; see [`docs/coverage-gaps.md`](docs/coverage-gaps.md).
 
 This is not hypothetical. A documentation-based pass once produced a finding that `GuiToolbar` was missing twelve methods, seven of them `GetButton*`. The type library shows `ISapToolbarTarget` exposes no own members at all — the guide documents all twelve on `GuiToolbarControl`, where sapsucker already wraps eleven of them, every `GetButton*` included (`src/sapsucker/components/shell.py:102`–`:144`). Filing that would have been a wrong issue about members the package already had.
 
@@ -46,7 +46,7 @@ Some things resist testing. Say so in the code, not just in a PR comment.
 **Every assertion must be shown able to fail.** Break the code, watch the test fail, restore. A test that passes against a broken implementation is decoration, and this has bitten repeatedly:
 
 - A pause-gap assertion checked only `gap is not None and gap >= timedelta(0)`, so a mutation measuring the gap from monitor start instead of from the previous change kept all twenty tests green.
-- Nothing asserted the *value* of `busy`, so mutating it to a COM name `GuiSession` does not have still passed every test. It would have put `<unreadable>` in every log row forever.
+- Nothing asserted the *value* of `busy`, so mutating it to a COM name `GuiSession` does not have would still have passed every test. It would have put `<unreadable>` in every log row forever.
 - An assertion joined with `or` (`"Traceback" not in x or "SystemExit" not in x`) could not fail at all. This one shipped, in `0a9d470`, and was fixed in `56b4daa`.
 
 The first two were caught by deliberately mutating the code, not by the suite. That is the point: the suite said green in all three cases.
@@ -85,7 +85,7 @@ uv run coverage run -m pytest
 uv run coverage report --fail-under 90 --omit "unittests/*,scripts/*"
 ```
 
-`scripts/` is omitted because it is tooling rather than package code and is ungated everywhere else; its SAP-side branches are unreachable on a runner, so measuring it would report on CI's environment rather than on the code. (The `scripts/*` half of that omit lands in #97 alongside the scripts themselves — a second reason this file must not merge first.)
+`scripts/` is omitted because it is tooling rather than package code and is ungated everywhere else; its SAP-side branches are unreachable on a runner, so measuring it would report on CI's environment rather than on the code.
 
 **Two more required checks have no command in the list above at all**, so a green local run is not the same as a green PR:
 
@@ -123,7 +123,7 @@ Nothing here is optional, and none of it was invented in the abstract — each r
 
 **Every change: draft → round 1 → fix → round 2 → Copilot → fix → all gates green → CI green → mark ready.** Two internal rounds per *change*, not per PR: round 2 is terminal for the diff it reviewed, and a substantial edit afterwards — including one made in response to Copilot — is a new change that starts again at round 1. Round 2's reviewer must *suggest fixes*, not only report blockers; a round that ends in a list of concerns nobody acted on has cost time and changed nothing.
 
-**Keep PRs small.** Two rounds over a large diff finds less than two rounds over a small one, and the second round is the one that catches the subtle thing.
+**Keep PRs small.** Two rounds over a large diff find less than two rounds over a small one, and the second round is the one that catches the subtle thing.
 
 **Fact-check prose before posting it.** Issue and PR bodies are the record other people act on, so they get the same scrutiny as code, from a reviewer that did not write them. This is not theoretical. One session on #91 published a paging loop that never scrolled — it incremented a local instead of writing back to the grid — and the correction that replaced it read `previous_start` in its break condition before ever assigning it, a `NameError` on the first iteration. (Its `start <= previous_start` guard was right, and is what makes an infinite loop impossible; an earlier revision of *this* file said the opposite.) The correcting comment's own heading said "four things need fixing" and then listed five.
 
