@@ -700,6 +700,7 @@ dev = [
     { name = "pytest" },
     { name = "python-dotenv" },
     { name = "ruff" },
+    { name = "typer" },
 ]
 linting = [
     { name = "ruff" },
@@ -714,6 +715,7 @@ tests = [
 ]
 type-check = [
     { name = "mypy" },
+    { name = "typer" },
 ]
 
 [package.metadata]
@@ -744,6 +746,7 @@ dev = [
     { name = "pytest", specifier = "==9.1.1" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "ruff", specifier = "==0.15.1" },
+    { name = "typer", specifier = ">=0.12" },
 ]
 linting = [{ name = "ruff", specifier = "==0.15.1" }]
 spell-check = [{ name = "codespell", specifier = "==2.4.3" }]
@@ -752,7 +755,10 @@ tests = [
     { name = "pytest", specifier = "==9.1.1" },
     { name = "python-dotenv", specifier = ">=1.0" },
 ]
-type-check = [{ name = "mypy", specifier = "==2.3.0" }]
+type-check = [
+    { name = "mypy", specifier = "==2.3.0" },
+    { name = "typer", specifier = ">=0.12" },
+]
 
 [[package]]
 name = "setuptools"

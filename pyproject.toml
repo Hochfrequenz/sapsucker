@@ -115,6 +115,9 @@ linting = [
 ]
 type_check = [
     "mypy==2.3.0",
+    # typer must be present or --strict cannot check monitor_cli: an absent
+    # dependency yields import-not-found plus untyped-decorator on @app.command.
+    { include-group = "cli_group" },
 ]
 spell_check = [
     "codespell==2.4.3",
