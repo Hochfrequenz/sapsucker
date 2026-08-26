@@ -32,6 +32,9 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...except the canonical PyInstaller spec, which is hand-written and required
+# by .github/workflows/build_executable.yml
+!sapsucker_monitor_windows.spec
 
 # Installer logs
 pip-log.txt

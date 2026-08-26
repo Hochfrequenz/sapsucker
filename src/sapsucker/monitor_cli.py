@@ -19,6 +19,7 @@ from typing import Annotated, Any
 import typer
 
 from sapsucker import SapGui
+from sapsucker._errors import SapConnectionError, ScriptingDisabledError
 from sapsucker.monitor import SessionMonitor, Watch
 
 app = typer.Typer(
@@ -30,7 +31,18 @@ app = typer.Typer(
 
 def _attach() -> Any:
     """Attach to the first session of the first connection, or exit with a diagnostic."""
-    app_ = SapGui.connect()
+    try:
+        app_ = SapGui.connect()
+    except ScriptingDisabledError as exc:
+        typer.secho(f"SAP GUI Scripting is not available: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    except SapConnectionError as exc:
+        typer.secho(
+            f"Cannot reach SAP GUI: {exc}\n  Start SAP GUI for Windows and log in, then retry.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     connections = app_.connections
     if len(connections) == 0:
         typer.secho(
