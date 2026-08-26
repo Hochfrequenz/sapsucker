@@ -70,13 +70,14 @@ text, tooltips, accessibility text, geometry and more (`sapsucker.models.Element
 
 ```python
 from sapsucker import SapGui
+from sapsucker.models import ElementInfo
 
 app = SapGui.connect()
 session = app.connections[0].sessions[0]
 
 window = session.find_by_id("wnd[0]")
 
-def walk(elements, depth=0):
+def walk(elements: list[ElementInfo], depth: int = 0) -> None:
     for element in elements:
         print("  " * depth, element.id, element.type, element.text)
         walk(element.children, depth + 1)   # ElementInfo nests its children
@@ -164,6 +165,7 @@ The [`examples/sapsucker/`](examples/sapsucker) directory contains complete runn
 - [`alv_grid_export.py`](examples/sapsucker/alv_grid_export.py) — query SE16N and read ALV grid data
 - [`form_filling.py`](examples/sapsucker/form_filling.py) — fill selection screens and execute reports
 - [`tree_navigation.py`](examples/sapsucker/tree_navigation.py) — browse and expand tree controls in SE80
+- [`screen_introspection.py`](examples/sapsucker/screen_introspection.py) — walk a whole screen with `dump_tree()` and dump it as JSON
 
 ## Architecture
 
