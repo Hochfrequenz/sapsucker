@@ -167,6 +167,42 @@ The [`examples/sapsucker/`](examples/sapsucker) directory contains complete runn
 - [`tree_navigation.py`](examples/sapsucker/tree_navigation.py) — browse and expand tree controls in SE80
 - [`screen_introspection.py`](examples/sapsucker/screen_introspection.py) — walk a whole screen with `dump_tree()` and dump it as JSON
 
+## Monitoring a session while a human records
+
+`sapsucker.monitor` samples a live session so a recording made with SAP GUI's own
+recorder (`Alt+F12` → *Script Recording and Playback*) can be paired with
+timestamps. A recorded `.vbs` has none, so it cannot tell you where the person
+paused — which is usually where they were deciding — nor that they went back to
+re-check a field, nor whether the save actually worked.
+
+```bash
+pip install sapsucker[cli]
+
+sapsucker-monitor -o timing.jsonl \
+  --watch "wnd[0]/shellcont/shell:FirstVisibleRow"
+```
+
+Start it, start the recorder, do the task, stop both. `--watch` takes any
+`element_id:ComProperty` pair and is repeatable — the example above timestamps
+each individual ALV scroll.
+
+A prebuilt Windows `.exe` is attached to each [release](https://github.com/Hochfrequenz/sapsucker/releases)
+for machines without a Python toolchain.
+
+As a library:
+
+```python
+from sapsucker.monitor import SessionMonitor, Watch
+
+monitor = SessionMonitor(session, watches=[Watch("wnd[0]/shellcont/shell", "FirstVisibleRow")])
+for sample in monitor.samples():      # generator: the caller owns the loop, and the thread
+    if sample.changed:
+        print(sample.elapsed_s, sample.changed, sample.gap_since_change_s)
+```
+
+`samples()` never starts a thread. COM is STA, so a monitor loop occupies its
+thread for its whole lifetime — see the `sapsucker.monitor` module docstring.
+
 ## Architecture
 
 sapsucker wraps the SAP GUI Scripting COM API as a hierarchy of typed Python classes:

@@ -25,7 +25,12 @@ hiddenimports = [
     "win32com",
     "win32com.client",
 ]
-hiddenimports += collect_submodules("win32com.client")
+_win32com_submodules = collect_submodules("win32com.client")
+if not _win32com_submodules:
+    # collect_submodules only warns when a package is missing. Failing loudly
+    # here beats shipping a binary that builds fine and dies on first COM call.
+    raise SystemExit("collect_submodules('win32com.client') found nothing - is pywin32 in the build env?")
+hiddenimports += _win32com_submodules
 
 name = os.environ.get("SAPSUCKER_BUILD_NAME", "sapsucker_monitor_windows")
 

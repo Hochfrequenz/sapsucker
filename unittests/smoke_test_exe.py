@@ -1,9 +1,14 @@
 """Smoke-test a built monitor .exe. Run: python unittests/smoke_test_exe.py dist/<binary>
 
-A CI runner has no SAP GUI, so COM cannot be exercised. What IS testable is the
-part that regressed during development: the no-SAP path. An early prototype
-surfaced a missing connection as a bare IndexError, so this asserts the binary
-fails cleanly with a diagnostic rather than a traceback.
+A CI runner has no SAP GUI, so a real session cannot be driven. What IS testable:
+
+* ``--selftest``, which proves the frozen binary actually carries pywin32. This
+  matters because the no-SAP path alone cannot detect a COM-less binary — both
+  failures surface identically.
+* Argument validation happening before any COM work.
+* A missing SAP GUI producing a diagnostic rather than a traceback. That path
+  regressed during development: an early prototype surfaced it as a bare
+  IndexError.
 """
 
 import subprocess
@@ -32,6 +37,16 @@ def main() -> int:
     for expected in ("--out", "--interval", "--watch"):
         if expected not in help_result.stdout:
             failures.append(f"--help output is missing {expected}")
+
+    # The no-SAP path below cannot distinguish a missing SAP GUI from a binary
+    # built without pywin32: _com.py swallows the pywin32 ImportError, so both
+    # surface as the same SapConnectionError. Check the COM stack directly, or a
+    # binary with no COM support at all passes this whole test.
+    selftest = _run(binary, "--selftest")
+    if selftest.returncode != 0:
+        failures.append(f"--selftest exited {selftest.returncode}\n{selftest.stdout}{selftest.stderr}")
+    if "com ok" not in selftest.stdout:
+        failures.append(f"--selftest did not confirm the COM stack:\n{selftest.stdout}{selftest.stderr}")
 
     # A bad --watch must be rejected before any COM work is attempted.
     bad_watch = _run(binary, "--watch", "no-colon-here")

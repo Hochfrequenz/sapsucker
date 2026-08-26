@@ -61,20 +61,24 @@ Example::
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
+from itertools import count
 from typing import Any
 
 __all__ = ["ABSENT", "UNREADABLE", "Sample", "SessionMonitor", "Watch"]
 
 UNREADABLE = "<unreadable>"
-"""A property read raised. Transient — the previous value is carried forward."""
+"""A property read raised. Transient — the previous value is carried forward.
+
+A SAP value that is literally this string is indistinguishable from a failed
+read and will be carried forward. Accepted: no real screen text is this.
+"""
 
 ABSENT = "<absent>"
 """``find_by_id`` found nothing. A real state (no modal open), never carried forward."""
-
-_BASE_KEYS = ("transaction", "program", "screen_number", "busy", "focus_id")
 
 
 @dataclass(frozen=True)
@@ -161,9 +165,13 @@ class SessionMonitor:
     watches: Sequence[Watch] = field(default_factory=tuple)
     interval: float = 0.2
 
+    def __post_init__(self) -> None:
+        if self.interval < 0:
+            raise ValueError(f"interval must be >= 0, got {self.interval}")
+
     def read_once(self) -> dict[str, Any]:
         """Read one raw fingerprint. Cheap property gets only, never ``dump_tree``."""
-        info = self.session.info
+        info = _safe(lambda: self.session.info)
         values: dict[str, Any] = {
             "transaction": _safe(lambda: info.transaction),
             "program": _safe(lambda: info.program),
@@ -172,11 +180,11 @@ class SessionMonitor:
             "focus_id": _safe(self._read_focus_id),
         }
         for watch in self.watches:
-            values[watch.key] = _safe(_bind(self._read_watch, watch))
+            values[watch.key] = _safe(partial(self._read_watch, watch))
         return values
 
     def samples(self) -> Iterator[Sample]:
-        """Yield samples forever, ``interval`` seconds apart.
+        """Yield samples forever, one every ``interval`` seconds.
 
         The caller owns the loop: break out of it, or wrap it in a timeout. The
         generator sleeps between samples, so it also owns the thread.
@@ -190,7 +198,7 @@ class SessionMonitor:
         previous: dict[str, Any] | None = None
         last_change_at = started
 
-        for seq in _counter():
+        for seq in count():
             values = self.read_once()
             now = time.monotonic()
 
@@ -215,9 +223,13 @@ class SessionMonitor:
             )
 
             previous = values
-            time.sleep(self.interval)
+            # Sleep the remainder, not the full interval: reads plus the consumer's
+            # work are part of the period, so a flat sleep undershoots the rate.
+            time.sleep(max(0.0, self.interval - (time.monotonic() - now)))
 
     def _read_focus_id(self) -> str:
+        # Read through .com rather than the gui_focus wrapper: this runs every
+        # sample, and the wrapper costs a factory type lookup per call.
         window = self.session.find_by_id("wnd[0]", raise_error=False)
         if window is None:
             return ABSENT
@@ -228,22 +240,6 @@ class SessionMonitor:
         if element is None:
             return ABSENT  # e.g. wnd[1] with no modal open: a state, not a failure
         return str(getattr(element.com, watch.prop))
-
-
-def _bind(read: Callable[[Watch], str], watch: Watch) -> Callable[[], str]:
-    """Bind *watch* now, so a loop variable is not captured late."""
-
-    def _call() -> str:
-        return read(watch)
-
-    return _call
-
-
-def _counter() -> Iterator[int]:
-    seq = 0
-    while True:
-        yield seq
-        seq += 1
 
 
 def _safe(read: Any) -> Any:
@@ -260,9 +256,13 @@ def _carry_forward_unreadable(values: dict[str, Any], previous: dict[str, Any]) 
     A property get that raises because the screen is mid-transition is not a
     state change. Treating it as one produced phantom events — one observed
     sample's only "change" was focus becoming unreadable. :data:`ABSENT` is
-    never carried forward: an element genuinely not being there is real, and
-    masking it would hide a modal closing.
+    neither carried forward nor used as a source: an element genuinely not being
+    there is real, so masking it would hide a modal closing, and reporting a
+    failed read as ``<absent>`` would defeat having two sentinels at all.
     """
     for key, value in list(values.items()):
-        if value == UNREADABLE and previous.get(key) not in (None, UNREADABLE):
-            values[key] = previous[key]
+        if value != UNREADABLE:
+            continue
+        carried = previous.get(key, UNREADABLE)
+        if carried not in (UNREADABLE, ABSENT):  # ABSENT is a state, not a good value
+            values[key] = carried

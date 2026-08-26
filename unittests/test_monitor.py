@@ -1,5 +1,7 @@
 """Tests for sapsucker.monitor — no SAP required, all fakes."""
 
+import subprocess
+import sys
 from itertools import islice
 from typing import Any
 from unittest.mock import MagicMock
@@ -54,7 +56,11 @@ class FakeSession:
             return window
         if element_id in state.get("elements", {}):
             element = MagicMock()
-            element.com.FirstVisibleRow = state["elements"][element_id]
+            value = state["elements"][element_id]
+            if value == "raise":
+                type(element.com).FirstVisibleRow = property(lambda _: (_ for _ in ()).throw(RuntimeError("boom")))
+                return element
+            element.com.FirstVisibleRow = value
             return element
         return None
 
@@ -99,6 +105,54 @@ class TestPauseSignal:
         gap = _take(SessionMonitor(session, interval=0), 2)[1].gap_since_change_s
         assert gap is not None and gap >= 0
 
+    def test_gap_measures_from_the_previous_change_not_from_start(self, monkeypatch):
+        """The pause signal is the headline feature: pin what it measures.
+
+        Each iteration reads the clock twice — once for the sample, once to work
+        out the remaining sleep — so ticks come in pairs after the initial one.
+        """
+        ticks = iter([100.0, 101.0, 101.0, 102.0, 102.0, 105.0, 105.0])
+        monkeypatch.setattr("sapsucker.monitor.time.monotonic", lambda: next(ticks))
+        monkeypatch.setattr("sapsucker.monitor.time.sleep", lambda _: None)
+        session = FakeSession([{"focus": "a"}, {"focus": "b"}, {"focus": "c"}])
+        samples = _take(SessionMonitor(session, interval=0), 3)
+
+        assert [s.elapsed_s for s in samples] == [1.0, 2.0, 5.0]
+        # Sample 3 is the discriminating one: 3.0 s since sample 2 changed, versus
+        # 5.0 s if the gap were measured from monitor start.
+        assert samples[2].gap_since_change_s == 3.0
+
+
+class TestBaseFields:
+    """Any _safe-wrapped read whose value is never asserted is untested: a wrong
+    COM name degrades silently to <unreadable> in every row, forever."""
+
+    def test_base_values_are_read_from_the_session(self):
+        session = FakeSession([{"focus": "a", "transaction": "BP", "screen_number": 3000, "busy": False}])
+        values = _take(SessionMonitor(session, interval=0), 1)[0].values
+        assert values["transaction"] == "BP"
+        assert values["program"] == "SAPLSETB"
+        assert values["screen_number"] == 3000
+        assert values["busy"] is False
+        assert values["focus_id"] == "a"
+
+    def test_busy_transition_is_reported(self):
+        session = FakeSession([{"focus": "a", "busy": False}, {"focus": "a", "busy": True}])
+        samples = _take(SessionMonitor(session, interval=0), 2)
+        assert samples[1].values["busy"] is True
+        assert samples[1].changed == ("busy",)
+
+    def test_a_failing_info_read_does_not_stop_monitoring(self):
+        """Closing SAP GUI before stopping the monitor is the normal end of a journey."""
+
+        class BrokenInfo(FakeSession):
+            @property
+            def info(self) -> Any:
+                raise RuntimeError("mid-transition")
+
+        samples = _take(SessionMonitor(BrokenInfo([{"focus": "a"}]), interval=0), 2)
+        assert [s.values["transaction"] for s in samples] == [UNREADABLE, UNREADABLE]
+
 
 class TestSentinels:
     def test_failed_read_carries_the_last_good_value_forward(self):
@@ -121,6 +175,19 @@ class TestSentinels:
         assert samples[0].values[watch.key] == "5"
         assert samples[1].values[watch.key] == ABSENT
         assert watch.key in samples[1].changed
+
+    def test_absent_is_not_used_as_a_carry_forward_source(self):
+        """Reporting a failed read as <absent> would defeat having two sentinels."""
+        watch = Watch("wnd[1]", "FirstVisibleRow")
+        session = FakeSession(
+            [
+                {"focus": "a", "elements": {}},
+                {"focus": "a", "elements": {"wnd[1]": "raise"}},
+            ]
+        )
+        samples = _take(SessionMonitor(session, watches=[watch], interval=0), 2)
+        assert samples[0].values[watch.key] == ABSENT
+        assert samples[1].values[watch.key] == UNREADABLE
 
     def test_unreadable_on_the_very_first_sample_is_kept(self):
         session = FakeSession([{"focus": "raise"}])
@@ -167,6 +234,21 @@ class TestWatchParse:
     def test_rejects_malformed(self, raw):
         with pytest.raises(ValueError, match="element_id:ComProperty"):
             Watch.parse(raw)
+
+
+class TestOptionalDependency:
+    def test_the_library_module_does_not_import_typer(self):
+        """typer is a runtime extra; sapsucker.monitor must work without it."""
+        code = (
+            "import sys; sys.modules['typer'] = None;import sapsucker.monitor;assert 'sapsucker.monitor' in sys.modules"
+        )
+        assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
+
+
+class TestInterval:
+    def test_a_negative_interval_is_rejected_at_construction(self):
+        with pytest.raises(ValueError, match="interval must be >= 0"):
+            SessionMonitor(FakeSession([{"focus": "a"}]), interval=-1)
 
 
 class TestRecord:
