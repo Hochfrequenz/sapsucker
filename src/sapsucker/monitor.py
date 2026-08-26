@@ -28,8 +28,8 @@ three screen transitions, and not a single scroll.
 Thread safety
 -------------
 COM is STA: every call must happen on the thread that called
-``pythoncom.CoInitialize()`` (see :mod:`sapsucker._com`). :meth:`
-SessionMonitor.samples` is a generator, so the caller owns the loop and
+``pythoncom.CoInitialize()`` (see :mod:`sapsucker._com`).
+:meth:`SessionMonitor.samples` is a generator, so the caller owns the loop and
 therefore the thread — this class never starts one. A monitor loop occupies its
 thread for its whole lifetime, so do not run one on a thread another consumer
 uses for COM work, and never from inside a shared COM worker.

@@ -33,7 +33,7 @@ cli = [
 ]
 
 [project.scripts]
-sapsucker-monitor = "sapsucker.monitor_cli:app"
+sapsucker-monitor = "sapsucker._monitor_entry:main"
 
 [project.urls]
 Changelog = "https://github.com/Hochfrequenz/sapsucker/releases"

@@ -11,6 +11,19 @@ import pytest
 from sapsucker.monitor import ABSENT, UNREADABLE, Sample, SessionMonitor, Watch
 
 
+class _Raises:
+    """An object whose named attribute raises. Scoped to this instance, unlike
+    installing a property on a MagicMock's auto-created subclass."""
+
+    def __init__(self, attr: str) -> None:
+        self._attr = attr
+
+    def __getattr__(self, name: str) -> Any:
+        if name == self._attr:
+            raise RuntimeError("mid-transition")
+        raise AttributeError(name)
+
+
 class FakeSession:
     """A session whose observable state can be scripted per sample.
 
@@ -50,7 +63,7 @@ class FakeSession:
             if focus is None:
                 return None
             if focus == "raise":
-                type(window.com.GuiFocus).Id = property(lambda _: (_ for _ in ()).throw(RuntimeError("boom")))
+                window.com.GuiFocus = _Raises("Id")
                 return window
             window.com.GuiFocus.Id = focus
             return window
@@ -237,6 +250,14 @@ class TestWatchParse:
 
 
 class TestOptionalDependency:
+    def test_the_console_script_shim_explains_the_missing_extra(self):
+        """`pip install sapsucker` without [cli] must not give a bare ImportError."""
+        code = "import sys; sys.modules['typer'] = None;from sapsucker._monitor_entry import main;main()"
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+        assert result.returncode == 1
+        assert "sapsucker[cli]" in result.stderr
+        assert "Traceback" not in result.stderr or "SystemExit" not in result.stderr
+
     def test_the_library_module_does_not_import_typer(self):
         """typer is a runtime extra; sapsucker.monitor must work without it."""
         code = (
