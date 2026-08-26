@@ -41,6 +41,7 @@ print(session.find_by_id("wnd[0]/sbar").text)
 
 ## Why sapsucker?
 
+- **Read a whole screen in one call** — `container.dump_tree()` walks any screen recursively and returns typed `ElementInfo`, so you can discover element IDs instead of guessing them (the whole subtree in a single COM round trip on SAP GUI >= 7.70 PL3)
 - **40+ typed wrapper classes** — `GuiGridView.get_cell_value()`, `GuiTree.expand_node()`, not generic `element.read("cell", row, col)`
 - **IDE autocomplete & type hints** on every method and property
 - **430+ unit tests**, 50+ integration tests verified against real SAP S/4 HANA
@@ -61,6 +62,49 @@ pip install sapsucker
 
 ## Usage Examples
 
+### Read an entire screen
+
+Don't know a screen's element IDs? Walk it. `dump_tree()` recurses through every
+child container and returns validated `ElementInfo` objects — id, type, name,
+text, tooltips, accessibility text, geometry and more (`sapsucker.models.ElementInfo`).
+
+```python
+from sapsucker import SapGui
+from sapsucker.models import ElementInfo
+
+app = SapGui.connect()
+session = app.connections[0].sessions[0]
+
+window = session.find_by_id("wnd[0]")
+
+def walk(elements: list[ElementInfo], depth: int = 0) -> None:
+    for element in elements:
+        print("  " * depth, element.id, element.type, element.text)
+        walk(element.children, depth + 1)   # ElementInfo nests its children
+
+walk(window.dump_tree())                    # full depth by default (safety cap: 200)
+# walk(window.dump_tree(max_depth=2))       # or bound it
+```
+
+On SAP GUI for Windows >= 7.70 PL3 `dump_tree()` uses `GuiSession.GetObjectTree`
+under the hood — the whole subtree in a single COM round trip — and falls back
+automatically to per-property reads on older releases.
+
+Feeding a screen to an LLM? Call `session.get_object_tree()` directly and ask for only the
+properties you need instead of the full element record. Unlike `dump_tree()`,
+this call has no fallback — it raises on SAP GUI older than 7.70 PL3.
+
+```python
+import json
+
+# A JSON *string*, one COM call, only the properties you list
+raw = session.get_object_tree("wnd[0]", props=["Id", "Type", "Text"])
+tree = json.loads(raw)          # the queried element is tree["children"][0]
+
+# props=None returns Id only — the cheapest possible screen dump
+ids_only_json = session.get_object_tree("wnd[0]")
+```
+
 ### Read an ALV grid
 
 ```python
@@ -80,7 +124,7 @@ for row in range(grid.row_count):
     print()
 ```
 
-### Navigate a tree
+### Navigate a tree control
 
 ```python
 from sapsucker.components.tree import GuiTree
@@ -121,6 +165,7 @@ The [`examples/sapsucker/`](examples/sapsucker) directory contains complete runn
 - [`alv_grid_export.py`](examples/sapsucker/alv_grid_export.py) — query SE16N and read ALV grid data
 - [`form_filling.py`](examples/sapsucker/form_filling.py) — fill selection screens and execute reports
 - [`tree_navigation.py`](examples/sapsucker/tree_navigation.py) — browse and expand tree controls in SE80
+- [`screen_introspection.py`](examples/sapsucker/screen_introspection.py) — walk a whole screen with `dump_tree()` and dump it as JSON
 
 ## Architecture
 
@@ -157,7 +202,7 @@ and an `asyncio.to_thread()` example.
 
 ## API Overview
 
-| Class             | Description                                               |
+| Class / method    | Description                                               |
 | ----------------- | --------------------------------------------------------- |
 | `SapGui`          | Entry point — `SapGui.connect()` returns `GuiApplication` |
 | `GuiApplication`  | Root object, manages connections                          |
@@ -173,6 +218,7 @@ and an `asyncio.to_thread()` example.
 | `GuiTree`         | Tree control (simple, list, or column)                    |
 | `GuiAbapEditor`   | ABAP source code editor                                   |
 | `GuiStatusbar`    | Status bar at bottom of window                            |
+| `.dump_tree()`    | Method on any visual container (`GuiVContainer`) — recursive screen dump, returns `list[ElementInfo]` |
 
 ## Contributing
 
