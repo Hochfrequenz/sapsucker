@@ -52,7 +52,7 @@ Example::
     from sapsucker.monitor import SessionMonitor, Watch
 
     session = SapGui.connect().connections[0].sessions[0]
-    monitor = SessionMonitor(session, watches=[Watch("wnd[0]/shellcont/shell", "FirstVisibleRow")])
+    monitor = SessionMonitor(session, watches=[Watch(element_id="wnd[0]/shellcont/shell", prop="FirstVisibleRow")])
     for sample in monitor.samples():
         if sample.changed:
             print(sample.elapsed_s, sample.changed)
@@ -61,14 +61,18 @@ Example::
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from itertools import count
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = ["ABSENT", "UNREADABLE", "Sample", "SessionMonitor", "Watch"]
+
+_T = TypeVar("_T")
 
 UNREADABLE = "<unreadable>"
 """A property read raised. Transient — the previous value is carried forward.
@@ -81,17 +85,19 @@ ABSENT = "<absent>"
 """``find_by_id`` found nothing. A real state (no modal open), never carried forward."""
 
 
-@dataclass(frozen=True)
-class Watch:
-    """An extra COM property to sample on a named element.
+class Watch(BaseModel):
+    """An extra COM property to sample on a named element."""
 
-    Args:
-        element_id: SAP GUI element id, e.g. ``"wnd[0]/shellcont/shell"``.
-        prop: COM property name in PascalCase, e.g. ``"FirstVisibleRow"``.
-    """
+    model_config = ConfigDict(frozen=True)
 
-    element_id: str
-    prop: str
+    element_id: str = Field(
+        description="SAP GUI element id.",
+        examples=["wnd[0]/shellcont/shell", "wnd[1]", "wnd[0]/usr/subA02P01:SAPLBUD0:1130/cmbBUS000FLDS-TITLE_MEDI"],
+    )
+    prop: str = Field(
+        description="COM property name, PascalCase as the scripting API spells it.",
+        examples=["FirstVisibleRow", "CurrentCellRow", "Text"],
+    )
 
     @property
     def key(self) -> str:
@@ -114,43 +120,57 @@ class Watch:
         return cls(element_id=element_id, prop=prop)
 
 
-@dataclass(frozen=True)
-class Sample:
+class Sample(BaseModel):
     """One observation of session state.
 
-    Attributes:
-        seq: Zero-based sample counter.
-        at: Local-time ISO 8601 timestamp, millisecond precision.
-        elapsed_s: Seconds since monitoring started.
-        values: The observed state, keyed by field name or :attr:`Watch.key`.
-        changed: Keys whose value differs from the previous sample. Empty on the
-            first sample, which is the baseline.
-        gap_since_change_s: Seconds since the previous *changing* sample, or
-            ``None`` if this sample changed nothing. This is the pause signal.
+    Durations are :class:`~datetime.timedelta`, which pydantic serialises as
+    ISO-8601 durations (``PT3.25S``) in JSON mode — so a log line carries a
+    self-describing duration rather than a bare number needing a unit convention.
     """
 
-    seq: int
-    at: str
-    elapsed_s: float
-    values: dict[str, Any]
-    changed: tuple[str, ...] = ()
-    gap_since_change_s: float | None = None
+    seq: int = Field(description="Zero-based sample counter.", examples=[0, 42])
+    at: datetime = Field(description="Local-time timestamp of the sample.")
+    elapsed: timedelta = Field(
+        description="Time since monitoring started.",
+        examples=["PT6.109S", "PT41.312S"],
+    )
+    values: dict[str, Any] = Field(
+        description="Observed state, keyed by field name or Watch.key.",
+        examples=[{"transaction": "BP", "screen_number": 3000, "focus_id": "/app/con[0]/ses[0]/wnd[0]/tbar[0]/okcd"}],
+    )
+    changed: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Keys whose value differs from the previous sample. Empty on the baseline sample.",
+        examples=[(), ("focus_id",), ("transaction", "program", "screen_number", "focus_id")],
+    )
+    gap_since_change: timedelta | None = Field(
+        default=None,
+        description=(
+            "Time since the previous *changing* sample, or None if this sample changed nothing. "
+            "This is the pause signal: a long gap marks where the human was deciding."
+        ),
+        examples=["PT6.328S", None],
+    )
 
     def as_record(self) -> dict[str, Any]:
-        """Flatten to a JSONL-friendly dict, values inlined alongside metadata."""
-        return {
-            "seq": self.seq,
-            "at": self.at,
-            "elapsed_s": self.elapsed_s,
-            "changed": list(self.changed),
-            "gap_since_change_s": self.gap_since_change_s,
-            **self.values,
-        }
+        """Flatten to a JSONL-friendly dict, values inlined alongside metadata.
+
+        Inlined rather than nested so each log line is one flat row, which is
+        what makes the series analysable with ordinary tools.
+        """
+        record: dict[str, Any] = self.model_dump(mode="json", exclude={"values"})
+        record.update(self.values)
+        return record
 
 
 @dataclass
 class SessionMonitor:
     """Samples observable state of a live session at a fixed interval.
+
+    A dataclass rather than a pydantic model, unlike :class:`Watch` and
+    :class:`Sample`: it holds a live COM session handle, which has nothing to
+    validate or serialise, and modelling it would mean ``arbitrary_types_allowed``
+    for no benefit. The data crossing the boundary is pydantic; the service is not.
 
     Args:
         session: A ``GuiSession``.
@@ -172,10 +192,20 @@ class SessionMonitor:
     def read_once(self) -> dict[str, Any]:
         """Read one raw fingerprint. Cheap property gets only, never ``dump_tree``."""
         info = _safe(lambda: self.session.info)
+        if isinstance(info, str):
+            # The whole Info object was unreadable, so degrade every field it
+            # would have supplied. Reading through the sentinel would raise an
+            # AttributeError that _safe happens to swallow; relying on that is
+            # accidental, and the type checker is right to object.
+            base: dict[str, Any] = dict.fromkeys(("transaction", "program", "screen_number"), UNREADABLE)
+        else:
+            base = {
+                "transaction": _safe(lambda: info.transaction),
+                "program": _safe(lambda: info.program),
+                "screen_number": _safe(lambda: info.screen_number),
+            }
         values: dict[str, Any] = {
-            "transaction": _safe(lambda: info.transaction),
-            "program": _safe(lambda: info.program),
-            "screen_number": _safe(lambda: info.screen_number),
+            **base,
             "busy": _safe(lambda: self.session.busy),
             "focus_id": _safe(self._read_focus_id),
         }
@@ -208,18 +238,18 @@ class SessionMonitor:
             else:
                 changed = ()
 
-            gap: float | None = None
+            gap: timedelta | None = None
             if changed:
-                gap = round(now - last_change_at, 3)
+                gap = timedelta(seconds=now - last_change_at)
                 last_change_at = now
 
             yield Sample(
                 seq=seq,
-                at=datetime.now(UTC).astimezone().isoformat(timespec="milliseconds"),
-                elapsed_s=round(now - started, 3),
+                at=datetime.now(UTC).astimezone(),
+                elapsed=timedelta(seconds=now - started),
                 values=values,
                 changed=changed,
-                gap_since_change_s=gap,
+                gap_since_change=gap,
             )
 
             previous = values
@@ -242,8 +272,13 @@ class SessionMonitor:
         return str(getattr(element.com, watch.prop))
 
 
-def _safe(read: Any) -> Any:
-    """Best-effort read: a mid-transition failure must not stop monitoring."""
+def _safe(read: Callable[[], _T]) -> _T | str:
+    """Best-effort read: a mid-transition failure must not stop monitoring.
+
+    Returns the read value, or :data:`UNREADABLE` if it raised — hence the
+    ``_T | str`` return, which makes the sentinel visible to type checkers
+    instead of hiding behind ``Any``.
+    """
     try:
         return read()
     except Exception:  # pylint: disable=broad-exception-caught

@@ -159,10 +159,14 @@ def main(
                 if sample.changed or sample.seq == 0:
                     if sample.seq:
                         changes += 1
-                    gap = "" if sample.gap_since_change_s is None else f"  (+{sample.gap_since_change_s:.1f}s)"
+                    gap = (
+                        ""
+                        if sample.gap_since_change is None
+                        else f"  (+{sample.gap_since_change.total_seconds():.1f}s)"
+                    )
                     focus = str(sample.values.get("focus_id", "?"))
                     typer.echo(
-                        f"  [{sample.elapsed_s:>7.3f}] "
+                        f"  [{sample.elapsed.total_seconds():>7.3f}] "
                         f"{sample.values.get('transaction', '?')}/{sample.values.get('screen_number', '?')}  "
                         f"focus={focus[-42:]}  "
                         f"changed={','.join(sample.changed) or 'baseline'}{gap}"

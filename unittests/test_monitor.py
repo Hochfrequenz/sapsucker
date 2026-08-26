@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+from datetime import timedelta
 from itertools import islice
 from typing import Any
 from unittest.mock import MagicMock
@@ -111,12 +112,12 @@ class TestChangeDetection:
 class TestPauseSignal:
     def test_gap_is_none_when_nothing_changed(self):
         session = FakeSession([{"focus": "a"}, {"focus": "a"}])
-        assert _take(SessionMonitor(session, interval=0), 2)[1].gap_since_change_s is None
+        assert _take(SessionMonitor(session, interval=0), 2)[1].gap_since_change is None
 
     def test_gap_is_set_when_something_changed(self):
         session = FakeSession([{"focus": "a"}, {"focus": "b"}])
-        gap = _take(SessionMonitor(session, interval=0), 2)[1].gap_since_change_s
-        assert gap is not None and gap >= 0
+        gap = _take(SessionMonitor(session, interval=0), 2)[1].gap_since_change
+        assert gap is not None and gap >= timedelta(0)
 
     def test_gap_measures_from_the_previous_change_not_from_start(self, monkeypatch):
         """The pause signal is the headline feature: pin what it measures.
@@ -130,10 +131,10 @@ class TestPauseSignal:
         session = FakeSession([{"focus": "a"}, {"focus": "b"}, {"focus": "c"}])
         samples = _take(SessionMonitor(session, interval=0), 3)
 
-        assert [s.elapsed_s for s in samples] == [1.0, 2.0, 5.0]
+        assert [s.elapsed.total_seconds() for s in samples] == [1.0, 2.0, 5.0]
         # Sample 3 is the discriminating one: 3.0 s since sample 2 changed, versus
         # 5.0 s if the gap were measured from monitor start.
-        assert samples[2].gap_since_change_s == 3.0
+        assert samples[2].gap_since_change == timedelta(seconds=3.0)
 
 
 class TestBaseFields:
@@ -177,7 +178,7 @@ class TestSentinels:
 
     def test_absent_element_is_reported_and_never_carried_forward(self):
         """A modal closing must be visible; masking it would hide the transition."""
-        watch = Watch("wnd[1]", "FirstVisibleRow")
+        watch = Watch(element_id="wnd[1]", prop="FirstVisibleRow")
         session = FakeSession(
             [
                 {"focus": "a", "elements": {"wnd[1]": 5}},
@@ -191,7 +192,7 @@ class TestSentinels:
 
     def test_absent_is_not_used_as_a_carry_forward_source(self):
         """Reporting a failed read as <absent> would defeat having two sentinels."""
-        watch = Watch("wnd[1]", "FirstVisibleRow")
+        watch = Watch(element_id="wnd[1]", prop="FirstVisibleRow")
         session = FakeSession(
             [
                 {"focus": "a", "elements": {}},
@@ -209,12 +210,12 @@ class TestSentinels:
 
 class TestWatches:
     def test_watch_reads_the_named_property(self):
-        watch = Watch("wnd[0]/shellcont/shell", "FirstVisibleRow")
+        watch = Watch(element_id="wnd[0]/shellcont/shell", prop="FirstVisibleRow")
         session = FakeSession([{"focus": "a", "elements": {"wnd[0]/shellcont/shell": 470}}])
         assert _take(SessionMonitor(session, watches=[watch], interval=0), 1)[0].values[watch.key] == "470"
 
     def test_scroll_change_is_detected(self):
-        watch = Watch("wnd[0]/shellcont/shell", "FirstVisibleRow")
+        watch = Watch(element_id="wnd[0]/shellcont/shell", prop="FirstVisibleRow")
         session = FakeSession(
             [
                 {"focus": "a", "elements": {"wnd[0]/shellcont/shell": 1}},
@@ -226,7 +227,10 @@ class TestWatches:
 
     def test_multiple_watches_are_bound_separately(self):
         """A late-bound loop variable would make every watch read the last one."""
-        watches = [Watch("wnd[0]/a", "FirstVisibleRow"), Watch("wnd[0]/b", "FirstVisibleRow")]
+        watches = [
+            Watch(element_id="wnd[0]/a", prop="FirstVisibleRow"),
+            Watch(element_id="wnd[0]/b", prop="FirstVisibleRow"),
+        ]
         session = FakeSession([{"focus": "x", "elements": {"wnd[0]/a": 1, "wnd[0]/b": 2}}])
         values = _take(SessionMonitor(session, watches=watches, interval=0), 1)[0].values
         assert values["wnd[0]/a:FirstVisibleRow"] == "1"
@@ -280,7 +284,9 @@ class TestRecord:
         assert record["changed"] == []
         assert record["transaction"] == "BP"
         assert record["focus_id"] == "a"
-        assert "at" in record and "elapsed_s" in record
+        assert "at" in record and "elapsed" in record
+        # pydantic serialises durations as ISO-8601, so a log line is self-describing
+        assert record["elapsed"].startswith("PT")
 
     def test_sequence_numbers_increment(self):
         session = FakeSession([{"focus": "a"}])
