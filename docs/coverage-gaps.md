@@ -15,6 +15,22 @@ uv run python scripts/dump_type_library.py -o typelib.json
 uv run python scripts/diff_typelib.py typelib.json
 ```
 
+Read the exit codes. The dumper returns **1** when it had to drop members or
+could not read a type at all, and names each one on stderr — it still writes the
+file, but every coverage number computed from it is understated, so a partial
+dump must not be mistaken for a clean one. The diff returns **2** when its input
+is unusable: no `types` object, missing base interfaces to subtract, or `Gui*`
+types the dump recorded as errors. Neither script treats a silent partial
+success as success.
+
+The pair is checked against a real installation by
+`unittests/test_dump_type_library_integration.py`, which skips off a machine
+with SAP GUI:
+
+```bash
+uv run pytest unittests/test_dump_type_library_integration.py -rs -v
+```
+
 ## Why the type library rather than the PDF
 
 The Scripting API guide documents properties in tables that no text extraction reads reliably, so a doc-based diff sees methods only — which would miss, for instance, `GuiComboBox.Key` (a property, and a real gap: see #88).
@@ -49,7 +65,9 @@ Own members, reached / total:
 | `GuiRadioButton` | 3 | 14 | |
 | `GuiStatusbar` | 1 | 9 | includes the message fields — see #90 |
 
-`GuiCTextField` and `GuiPasswordField` are deliberately absent. The tool reports 6/20 for each, but the guide says they add no members of their own to `GuiTextField` (§1.2.20, §1.2.43) and their wrapper bodies are empty (`src/sapsucker/components/field.py:56`, `:60`) — that row is the `GuiTextField` row restated, not a separate gap.
+`GuiCTextField` and `GuiPasswordField` are absent from the table, and **one number behind that decision does not add up.** The guide says they add no members of their own to `GuiTextField` (§1.2.20, §1.2.43), and their wrapper bodies are empty (`src/sapsucker/components/field.py:56`, `:60`), so all three classes reach the identical member set and their rows should be identical. They are not: the tool reported 6/20 for the two subclasses against 7/23 for `GuiTextField` above. A flattened dispinterface for a subclass cannot expose *fewer* members than its parent's, so one of two things is true — the 6/20 is stale, or `interface_candidates()` resolved these classes to a different or partial interface, in which case the same silent mis-resolution could be understating other rows in the table.
+
+Unresolved, and not resolvable off the Windows box. The next dump settles it: `diff_typelib.py` prints the interface it picked in the last column of every row, so compare the interface names for `GuiTextField`, `GuiCTextField` and `GuiPasswordField`. Do not cite these two classes' numbers in #41/#88/#90 until then.
 
 `GuiGridView` has the largest gap among classes in active consumer use, but it is not alone: `GuiSession`, `GuiTextField`, `GuiComboBox` and `GuiStatusbar` are all in this table and all four are exercised by the reconstruction in `docs/spike/`. #88 and #90 are gaps in two of them.
 

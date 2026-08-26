@@ -156,7 +156,10 @@ def test_the_dump_feeds_the_diff(ocx: Path, tmp_path: Path) -> None:
         text=True,
         check=False,  # the assertion below reports stderr; check=True would hide it
     )
-    assert dumped.returncode == 0, dumped.stderr
+    # Exit 0 also means the dump is complete: the script returns 1 when it had
+    # to drop members or could not read a type, because those understate every
+    # coverage number computed from the file. stderr names what was lost.
+    assert dumped.returncode == 0, f"incomplete dump (exit {dumped.returncode}):\n{dumped.stderr}"
 
     data = json.loads(out.read_text(encoding="utf-8"))
     diff_mod = _load_script("diff_typelib")
@@ -172,7 +175,11 @@ def test_the_dump_feeds_the_diff(ocx: Path, tmp_path: Path) -> None:
         cwd=tmp_path,
         check=False,  # ditto: exit 2 is a documented outcome worth reporting
     )
-    assert diffed.returncode == 0, diffed.stderr
+    # 2 is the diff's "I cannot trust this input" code: absent base interfaces
+    # to subtract, or Gui* types the dump recorded as errors.
+    assert diffed.returncode == 0, (
+        f"diff refused the dump (exit {diffed.returncode}):\n{diffed.stdout}\n{diffed.stderr}"
+    )
     assert "own members only" in diffed.stdout
 
     # have=0 across the board is what a silently-broken diff looks like, and it

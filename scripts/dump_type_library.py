@@ -104,6 +104,10 @@ def main() -> int:
     print(f"type library: {lib_name} — {lib_doc} ({count} type infos)", file=sys.stderr)
 
     types: dict[str, Any] = {}
+    # A dropped member is a member diff_typelib.py then counts as NOT exposed, so
+    # silent drops understate coverage in the published figures with no signal
+    # that anything went missing. Counted per type and reported below.
+    dropped: dict[str, int] = {}
     for i in range(count):
         name = lib.GetDocumentation(i)[0]
         try:
@@ -114,6 +118,7 @@ def main() -> int:
             continue
 
         members: dict[str, dict[str, Any]] = {}
+        lost = 0
         for f in range(attr.cFuncs):
             try:
                 desc = info.GetFuncDesc(f)
@@ -123,16 +128,19 @@ def main() -> int:
                 if desc.invkind & INVOKE_FUNC:
                     entry["params"] = len(desc.args)
             except Exception:
-                continue
+                lost += 1
         # Some interfaces expose fields (vars) rather than funcs.
         for v in range(attr.cVars):
             try:
                 desc = info.GetVarDesc(v)
                 members.setdefault(info.GetNames(desc.memid)[0], {"kinds": ["var"], "params": None})
             except Exception:
-                continue
+                lost += 1
 
         types[name] = {"typekind": attr.typekind, "members": members}
+        if lost:
+            types[name]["dropped"] = lost
+            dropped[name] = lost
 
     payload = {"library": {"name": lib_name, "doc": lib_doc}, "types": types}
     args.out.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
@@ -142,6 +150,22 @@ def main() -> int:
     gui = sorted(k for k in with_members if k.startswith("Gui"))
     print(f"Gui* types with members: {len(gui)}", file=sys.stderr)
     print("  " + ", ".join(gui[:12]) + (" …" if len(gui) > 12 else ""), file=sys.stderr)
+
+    # Both of these make every number downstream suspect, so they are loud and
+    # they change the exit code — a partial dump must not look like a clean one.
+    errored = sorted(k for k, v in types.items() if "error" in v)
+    if errored:
+        print(f"\n{len(errored)} type(s) could not be read at all:", file=sys.stderr)
+        for name in errored:
+            print(f"  {name}: {types[name]['error']}", file=sys.stderr)
+    if dropped:
+        total = sum(dropped.values())
+        print(f"\n{total} member(s) dropped across {len(dropped)} type(s):", file=sys.stderr)
+        for name, n in sorted(dropped.items(), key=lambda kv: -kv[1]):
+            print(f"  {name}: {n}", file=sys.stderr)
+    if errored or dropped:
+        print("\nthe dump is incomplete — coverage computed from it is understated", file=sys.stderr)
+        return 1
     return 0
 
 
