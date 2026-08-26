@@ -189,3 +189,60 @@ def test_the_dump_feeds_the_diff(ocx: Path, tmp_path: Path) -> None:
     assert combobox, f"GuiComboBox absent from the report:\n{diffed.stdout}"
     have = int(combobox[0].split()[2])
     assert have > 0, f"GuiComboBox credited with 0 wrapped members — the diff matched nothing: {combobox[0]}"
+
+
+@windows_only
+@authorized_only
+def test_why_a_row_falls_back_to_the_bare_interface(ocx: Path, tmp_path: Path) -> None:
+    """Check the *mechanism* behind the `*` mark, not just that the mark appears.
+
+    `docs/coverage-gaps.md` explains `GuiCTextField` and `GuiPasswordField`
+    reporting 20 against `GuiTextField`'s 23 by saying the subclasses have no
+    `ISap<Name>Target` variant carrying members, so resolution falls through to
+    the bare `ISap<Name>`, which is a different and smaller surface.
+
+    That explanation was written from the *output* — the interface column showed
+    different names — and inferred backwards. Inferring the cause of SAP
+    behaviour from SAP output is the thing AGENTS.md forbids, so this asserts it
+    against the type library directly: for every class the report marks, the
+    first-choice candidate must genuinely be absent or memberless in the dump.
+    If any marked class turns out to *have* a populated `*Target` interface, the
+    documented explanation is wrong and the real cause is something else.
+    """
+    out = tmp_path / "typelib.json"
+    dumped = subprocess.run(
+        [sys.executable, str(SCRIPTS / "dump_type_library.py"), "--typelib", str(ocx), "-o", str(out)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert dumped.returncode == 0, f"incomplete dump (exit {dumped.returncode}):\n{dumped.stderr}"
+
+    types = json.loads(out.read_text(encoding="utf-8"))["types"]
+    diff_mod = _load_script("diff_typelib")
+
+    coclasses = [k for k, v in types.items() if k.startswith("Gui") and v.get("typekind") == diff_mod.TKIND_COCLASS]
+    fellback: list[tuple[str, str, str]] = []
+    for cls in coclasses:
+        candidates = diff_mod.interface_candidates(cls)
+        resolved = next((c for c in candidates if types.get(c, {}).get("members")), None)
+        if resolved is not None and resolved != candidates[0]:
+            fellback.append((cls, candidates[0], resolved))
+
+    # The mechanism: the first choice really is unusable, not merely unpicked.
+    for cls, first_choice, resolved in fellback:
+        entry = types.get(first_choice, {})
+        assert not entry.get("members"), (
+            f"{cls} fell through to {resolved}, but {first_choice} exists with "
+            f"{len(entry['members'])} members — the documented explanation is wrong"
+        )
+
+    # And the specific pair the document names must actually be in that set,
+    # or docs/coverage-gaps.md is describing a case that does not occur here.
+    named = {"GuiCTextField", "GuiPasswordField"}
+    fell_names = {cls for cls, _first, _resolved in fellback}
+    if named <= set(coclasses):
+        assert named <= fell_names, (
+            f"docs/coverage-gaps.md explains {sorted(named)} as fallback rows, but on this "
+            f"installation the classes that fell back are {sorted(fell_names)}"
+        )

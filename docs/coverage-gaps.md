@@ -77,7 +77,9 @@ GuiCTextField               20     6   14  ISapCTextField *
 GuiPasswordField            20     6   14  ISapPasswordField *
 ```
 
-**Those three rows measure different kinds of interface.** `GuiTextField` resolves to the `ISap<Name>Target` dispinterface; the two subclasses have no `*Target` variant carrying members, so `interface_candidates()` falls through to the bare `ISap<Name>`, which exposes a smaller surface. That is why a subclass appears to expose *fewer* members than its parent — impossible for a flattened interface, and the signal that the comparison was never apples-to-apples.
+**Observed, from that run:** the three classes resolved to differently-named interfaces — one `*Target`, two bare — and a subclass reports fewer members than its parent. Those rows are therefore not comparable with each other, whatever the cause.
+
+**The cause, and how far it is established.** `interface_candidates()` tries `ISap<Name>Target` first and falls through to the bare `ISap<Name>`, so the reading is that neither subclass has a `*Target` variant carrying members. That is inferred from the resolution order and the output, not read off the type library — so it is asserted by `test_why_a_row_falls_back_to_the_bare_interface`, which checks against the live library that every class the report marks really does have an absent or memberless first choice. Until that test has run on a machine with SAP GUI, treat the mechanism as the likely explanation rather than an established one; the row-level warning above does not depend on it.
 
 The numbers are therefore not so much wrong as **not comparable**, and the "restated row" claim was wrong for a reason that had nothing to do with the guide. The two classes stay out of the table, now for the right reason: including them invites exactly the parent-versus-subclass reading that does not hold.
 
