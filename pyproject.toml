@@ -42,7 +42,12 @@ Homepage = "https://github.com/Hochfrequenz/sapsucker"
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["*.md"]
+extend-exclude = [
+    "*.md",
+    # Spike evidence, kept byte-for-byte as it was generated so it can be judged
+    # as-generated. Reformatting it would defeat the point of keeping it.
+    "docs/spike/",
+]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "N", "PL", "RUF"]

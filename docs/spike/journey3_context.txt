@@ -1,0 +1,2 @@
+i opened transaction bp, chose person as bp type, filled the form and clicked on sichern.
+a popup appeared informing me about errors with the phone number. i clicked ok. then it was saved.
