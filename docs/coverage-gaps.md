@@ -11,7 +11,7 @@ A snapshot of how much of the SAP GUI Scripting COM API this package reaches, me
 # the type library is static.
 uv run python scripts/dump_type_library.py -o typelib.json
 
-# From the repository root, with the JSON anywhere:
+# Anywhere, with the JSON anywhere:
 uv run python scripts/diff_typelib.py typelib.json
 ```
 

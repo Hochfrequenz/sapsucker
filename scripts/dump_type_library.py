@@ -44,10 +44,18 @@ def _kind(invkind: int) -> str:
     return "property(" + "/".join(parts) + ")" if parts else f"unknown({invkind})"
 
 
-def _load_type_lib() -> Any:
+def _load_type_lib(explicit: Path | None = None) -> Any:
     """Get the type library, preferring a live scripting engine over a file guess."""
     import pythoncom  # type: ignore[import-untyped]  # noqa: PLC0415
     import win32com.client  # type: ignore[import-untyped]  # noqa: PLC0415
+
+    if explicit is not None:
+        # An explicit path is an instruction, not a hint: fail loudly rather than
+        # falling through to a guess and dumping a different installation's library.
+        if not explicit.exists():
+            raise SystemExit(f"{explicit} does not exist")
+        print(f"loading {explicit}", file=sys.stderr)
+        return pythoncom.LoadTypeLib(str(explicit))
 
     try:
         engine = win32com.client.GetObject("SAPGUI").GetScriptingEngine
@@ -67,16 +75,23 @@ def _load_type_lib() -> Any:
             print(f"loading {path}", file=sys.stderr)
             return pythoncom.LoadTypeLib(str(path))
     raise SystemExit(
-        "No type library found. Start SAP GUI (a session is not required), or pass the path to sapfewse.ocx."
+        "No type library found. Start SAP GUI (a session is not required), "
+        "or pass the path to sapfewse.ocx with --typelib."
     )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-o", "--out", default="typelib.json", type=Path)
+    parser.add_argument(
+        "--typelib",
+        type=Path,
+        default=None,
+        help="path to sapfewse.ocx, for an installation outside the two default locations",
+    )
     args = parser.parse_args()
 
-    lib = _load_type_lib()
+    lib = _load_type_lib(args.typelib)
     lib_name, lib_doc = lib.GetDocumentation(-1)[:2]
     count = lib.GetTypeInfoCount()
     print(f"type library: {lib_name} — {lib_doc} ({count} type infos)", file=sys.stderr)

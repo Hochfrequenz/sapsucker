@@ -3,7 +3,7 @@
 Coverage tooling, not part of the package. Run beside a typelib.json produced by
 ``dump_type_library.py``:
 
-    uv run python scripts/diff_typelib.py typelib.json   # from the repository root
+    uv run python scripts/diff_typelib.py typelib.json
 
 Answers "what does this SAP GUI expose that sapsucker does not reach?" — the
 authoritative version of the question, for the installed release, covering
@@ -26,7 +26,8 @@ import re
 import sys
 from pathlib import Path
 
-SRC = Path("src/sapsucker")
+# Anchored to this file, not to the working directory: run from anywhere.
+SRC = Path(__file__).resolve().parent.parent / "src" / "sapsucker"
 TKIND_COCLASS = 5  # oaidl.h TYPEKIND
 BASE_INTERFACES = ("ISapComponentTarget", "ISapVContainerTarget", "ISapContainerTarget", "ISapShell")
 
@@ -68,7 +69,10 @@ def sapsucker_classes() -> dict[str, tuple[set[str], list[str]]]:
 
 
 def flattened(cls: str, table: dict[str, tuple[set[str], list[str]]], seen: set[str] | None = None) -> set[str]:
-    seen = seen or set()
+    # `seen or set()` would discard an explicitly passed empty set, so a caller
+    # that supplies one to inspect afterwards would see it stay empty.
+    if seen is None:
+        seen = set()
     if cls in seen or cls not in table:
         return set()
     seen.add(cls)
@@ -87,7 +91,7 @@ def main() -> int:
         # Without this, SRC.rglob finds nothing, every class reports have=0 and
         # "[not defined in sapsucker]", and the script exits 0 — a plausible,
         # total, silent wrong answer.
-        print(f"{SRC} not found — run this from the repository root", file=sys.stderr)
+        print(f"{SRC} not found — is this a full checkout?", file=sys.stderr)
         return 2
     data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     types = data["types"]
