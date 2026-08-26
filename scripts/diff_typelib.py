@@ -106,7 +106,7 @@ def main() -> int:
         missing = sorted(exposed - have)
         rows.append((cls, iface, len(exposed), len(exposed) - len(missing), missing, cls in ours))
 
-    print(f"own members only — the GuiComponent/VComponent/Container/Shell surface is subtracted")
+    print("own members only — the GuiComponent/VComponent/Container/Shell surface is subtracted")
     print(f"(inherited surface subtracted: {len(inherited)} member names)\n")
     print(f"{'class':24s} {'live':>5s} {'have':>5s} {'gap':>4s}  interface")
     print("-" * 78)
