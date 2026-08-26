@@ -197,7 +197,7 @@ from sapsucker.monitor import SessionMonitor, Watch
 monitor = SessionMonitor(session, watches=[Watch(element_id="wnd[0]/shellcont/shell", prop="FirstVisibleRow")])
 for sample in monitor.samples():      # generator: the caller owns the loop, and the thread
     if sample.changed:
-        print(sample.elapsed_s, sample.changed, sample.gap_since_change_s)
+        print(sample.elapsed, sample.changed, sample.gap_since_change)
 ```
 
 `samples()` never starts a thread. COM is STA, so a monitor loop occupies its

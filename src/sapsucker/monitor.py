@@ -55,7 +55,7 @@ Example::
     monitor = SessionMonitor(session, watches=[Watch(element_id="wnd[0]/shellcont/shell", prop="FirstVisibleRow")])
     for sample in monitor.samples():
         if sample.changed:
-            print(sample.elapsed_s, sample.changed)
+            print(sample.elapsed, sample.changed)
 """
 
 from __future__ import annotations
@@ -128,8 +128,13 @@ class Sample(BaseModel):
     self-describing duration rather than a bare number needing a unit convention.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     seq: int = Field(description="Zero-based sample counter.", examples=[0, 42])
-    at: datetime = Field(description="Local-time timestamp of the sample.")
+    at: datetime = Field(
+        description="Local-time timestamp of the sample.",
+        examples=["2026-08-26T14:41:30.602+02:00"],
+    )
     elapsed: timedelta = Field(
         description="Time since monitoring started.",
         examples=["PT6.109S", "PT41.312S"],
@@ -240,21 +245,24 @@ class SessionMonitor:
 
             gap: timedelta | None = None
             if changed:
-                gap = timedelta(seconds=now - last_change_at)
+                gap = timedelta(seconds=round(now - last_change_at, 3))
                 last_change_at = now
 
             yield Sample(
                 seq=seq,
                 at=datetime.now(UTC).astimezone(),
-                elapsed=timedelta(seconds=now - started),
+                elapsed=timedelta(seconds=round(now - started, 3)),
                 values=values,
                 changed=changed,
                 gap_since_change=gap,
             )
 
             previous = values
-            # Sleep the remainder, not the full interval: reads plus the consumer's
-            # work are part of the period, so a flat sleep undershoots the rate.
+            # Sleep the remainder of the period, not the full interval: the
+            # consumer's work is part of the period, so a flat sleep would add it
+            # on top. The read itself is NOT compensated — `now` is captured after
+            # read_once — so the achieved period is interval + read time
+            # (230 ms measured at a nominal 200 ms).
             time.sleep(max(0.0, self.interval - (time.monotonic() - now)))
 
     def _read_focus_id(self) -> str:
