@@ -133,7 +133,9 @@ class Sample(BaseModel):
     seq: int = Field(description="Zero-based sample counter.", examples=[0, 42])
     at: datetime = Field(
         description="Local-time timestamp of the sample.",
-        examples=["2026-08-26T14:41:30.602+02:00"],
+        # Microsecond precision, unlike the durations: a timestamp is an actual
+        # observation, so it is recorded as read rather than rounded.
+        examples=["2026-08-26T16:47:37.113528+02:00"],
     )
     elapsed: timedelta = Field(
         description="Time since monitoring started.",
