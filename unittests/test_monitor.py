@@ -260,7 +260,9 @@ class TestOptionalDependency:
         result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
         assert result.returncode == 1
         assert "sapsucker[cli]" in result.stderr
-        assert "Traceback" not in result.stderr or "SystemExit" not in result.stderr
+        # A conjunction would be wrong here too: SystemExit prints no traceback,
+        # so the only thing to assert is that no traceback appears at all.
+        assert "Traceback" not in result.stderr
 
     def test_the_library_module_does_not_import_typer(self):
         """typer is a runtime extra; sapsucker.monitor must work without it."""
