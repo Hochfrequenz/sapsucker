@@ -48,7 +48,8 @@ class GuiStatusbar(GuiVComponent):
     def message_has_long_text(self) -> bool:
         """Whether the current message has a long text that can be fetched.
 
-        Observed ``False`` for the messages checked live; the ``True`` case was not reproduced.
+        Observed live: ``True`` for message DS 017 (SE38, program does not exist), ``False``
+        for S# 343 (transaction does not exist).
         """
         return bool(self._com.MessageHasLongText)
 

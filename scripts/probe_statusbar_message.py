@@ -3,8 +3,9 @@
 Needs a running SAP GUI with scripting enabled and at least one open session.
 Two cases are run and every wrapped status-bar message member is printed:
 
-1. A non-existent transaction code via /n: expected message_type "S", message_id
-   "S#", message_number "343", message_parameter(0) == the transaction code.
+1. A non-existent transaction code via /n: expected message_type "S" or "E" (both were
+   observed for the same message, depending on context), message_id "S#",
+   message_number "343", message_parameter(0) == the transaction code.
 2. SE38 display of a non-existent program: expected message_type "E", message_id
    "DS", message_number "017", message_parameter(0) == the program name.
 
@@ -48,7 +49,7 @@ def _read(bar: object, label: str) -> bool:
     return raised
 
 
-def _check(bar: object, label: str, mtype: str, mid: str, mnum: str, param0: str) -> bool:
+def _check(bar: object, label: str, mtypes: tuple[str, ...], mid: str, mnum: str, param0: str) -> bool:
     """Return True if the case failed."""
     failed = _read(bar, label)
     try:
@@ -60,9 +61,8 @@ def _check(bar: object, label: str, mtype: str, mid: str, mnum: str, param0: str
         )
     except Exception:  # noqa: BLE001
         return True
-    expected = (mtype, mid, mnum, param0)
-    if actual != expected:
-        print(f"FAIL ({label}): expected {expected!r}, got {actual!r}")
+    if actual[0] not in mtypes or actual[1:] != (mid, mnum, param0):
+        print(f"FAIL ({label}): expected type in {mtypes!r} and {(mid, mnum, param0)!r}, got {actual!r}")
         failed = True
     return failed
 
@@ -76,19 +76,19 @@ def main() -> int:
 
     failed = False
 
-    # Case 1: nonexistent transaction -> "S" message
+    # Case 1: nonexistent transaction -> "S" or "E" message
     session.find_by_id("wnd[0]/tbar[0]/okcd").text = f"/n{TX}"
     session.find_by_id("wnd[0]").send_v_key(0)
     bar = session.find_by_id("wnd[0]/sbar")
-    failed |= _check(bar, "nonexistent transaction", "S", "S#", "343", TX)
+    failed |= _check(bar, "nonexistent transaction", ("S", "E"), "S#", "343", TX)
 
     # Case 2: SE38 display of a nonexistent program -> "E" message
     session.find_by_id("wnd[0]/tbar[0]/okcd").text = "/nSE38"
     session.find_by_id("wnd[0]").send_v_key(0)
     session.find_by_id("wnd[0]/usr/ctxtRS38M-PROGRAMM").text = PROG
-    session.find_by_id("wnd[0]/tbar[1]/btn[7]").press()  # Display
+    session.find_by_id("wnd[0]").send_v_key(7)  # F7 = Display
     bar = session.find_by_id("wnd[0]/sbar")
-    failed |= _check(bar, "SE38 nonexistent program", "E", "DS", "017", PROG)
+    failed |= _check(bar, "SE38 nonexistent program", ("E",), "DS", "017", PROG)
 
     # Leave the session on the start screen
     session.find_by_id("wnd[0]/tbar[0]/okcd").text = "/n"
