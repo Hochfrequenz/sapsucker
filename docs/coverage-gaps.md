@@ -37,7 +37,7 @@ those tests report `skipped` rather than `passed`, nothing about SAP was checked
 
 ## Why the type library rather than the PDF
 
-The Scripting API guide documents properties in tables that no text extraction reads reliably, so a doc-based diff sees methods only — which would miss, for instance, `GuiComboBox.Key` (a property, and a real gap: see #88).
+The Scripting API guide documents properties in tables that no text extraction reads reliably, so a doc-based diff sees methods only — which would miss, for instance, `GuiComboBox.Key` (a property, and a real gap until it was wrapped in #114: see #88).
 
 The type library also describes the version actually installed, so a "gap" cannot turn out to be a member that only exists in a newer SAP GUI. That distinction is not academic: a doc-based pass produced a finding that `GuiToolbar` was missing twelve methods, seven of them `GetButton*`. The type library shows `ISapToolbarTarget` with no own members at all — the guide documents all twelve on `GuiToolbarControl` (§1.2.68), not `GuiToolbar` (§1.2.67), and sapsucker wraps eleven of them there, all seven `GetButton*` included (`src/sapsucker/components/shell.py:104`–`:144`); only `GetMenuItemIdFromPosition` is unwrapped. The finding was never filed, but it would have been wrong.
 
@@ -66,7 +66,7 @@ Own members, reached / total:
 | `GuiTextedit` | 10 | 29 | |
 | `GuiTextField` | 7 | 23 | |
 | `GuiTableControl` | 8 | 21 | |
-| `GuiComboBox` | 4 | 18 | includes `Key` — see #88 |
+| `GuiComboBox` | 5 | 18 | `Key` wrapped since #114 |
 | `GuiCheckBox` | 5 | 17 | |
 | `GuiRadioButton` | 3 | 14 | |
 | `GuiStatusbar` | 1 | 9 | includes the message fields — see #90 |
@@ -89,7 +89,7 @@ The numbers are therefore not so much wrong as **not comparable**, and the "rest
 
 `diff_typelib.py` now marks any fallback row with `*` and prints what the mark means, because nothing in the output previously distinguished a first-choice resolution from a fallback. Read a marked row only against other marked rows.
 
-`GuiGridView` has the largest gap among classes in active consumer use, but it is not alone: `GuiSession`, `GuiTextField`, `GuiComboBox` and `GuiStatusbar` are all in this table and all four are exercised by the reconstruction in `docs/spike/`. #88 and #90 are gaps in two of them.
+`GuiGridView` has the largest gap among classes in active consumer use, but it is not alone: `GuiSession`, `GuiTextField`, `GuiComboBox` and `GuiStatusbar` are all in this table and all four are exercised by the reconstruction in `docs/spike/`. #88 (`GuiComboBox.Key`) was a gap in one of them and is wrapped since #114; #90 is a gap in another.
 
 ## Classes not defined at all
 

@@ -223,13 +223,9 @@ def create_person_business_partner(
             f"(transaction={session.info.transaction!r}, screen={session.info.screen_number})"
         )
 
-    # 3. Title. sapsucker's GuiComboBox wraps only COM `Value` (the
-    #    language-dependent display text, combobox.py:45-51) and has no
-    #    `Key` wrapper, but the recording sets `.key` — the
-    #    language-independent code. Fall back to the raw COM object
-    #    (`.com`, base.py:31) so this works in an EN or DE session alike.
+    # 3. Title, selected by the language-independent key.
     title_combo = _element(session, ID_TITLE)
-    title_combo.com.Key = person.title_key
+    title_combo.key = person.title_key
 
     # 4. Name, address, phone.
     typed: list[tuple[str, str, str]] = [
