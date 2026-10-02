@@ -53,12 +53,11 @@ class GuiComboBox(GuiVComponent):
 
     @property
     def value(self) -> str:
-        """Displayed text/value of the currently selected entry (not its key; use :attr:`key`)."""
+        """Displayed text of the selected entry (not its key; to select by key, set :attr:`key`)."""
         return str(self._com.Value)
 
     @value.setter
     def value(self, value: str) -> None:
-        """Set the displayed text/value. To select an entry by key, set :attr:`key` instead."""
         self._com.Value = value
 
     @property

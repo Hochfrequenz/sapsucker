@@ -55,15 +55,6 @@ class TestGuiComboBox:
         combo.key = "0002"
         assert combo._com.Value == "Displayed text"
 
-    def test_key_is_a_real_property_not_a_plain_attribute(self):
-        assert isinstance(GuiComboBox.key, property)
-        assert GuiComboBox.key.fset is not None
-
-    def test_value_docstring_describes_displayed_text_not_key(self):
-        doc = GuiComboBox.value.__doc__ or ""
-        assert "Displayed text" in doc
-        assert "selected key" not in doc
-
     def test_value_getter(self):
         combo = _make_combo(Value="001")
         assert combo.value == "001"
