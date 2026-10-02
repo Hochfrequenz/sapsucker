@@ -89,7 +89,7 @@ The numbers are therefore not so much wrong as **not comparable**, and the "rest
 
 `diff_typelib.py` now marks any fallback row with `*` and prints what the mark means, because nothing in the output previously distinguished a first-choice resolution from a fallback. Read a marked row only against other marked rows.
 
-`GuiGridView` has the largest gap among classes in active consumer use, but it is not alone: `GuiSession`, `GuiTextField`, `GuiComboBox` and `GuiStatusbar` are all in this table and all four are exercised by the reconstruction in `docs/spike/`. #88 (`GuiComboBox.Key`) was a gap in one of them and is wrapped since #114; #90 is a gap in another, partly closed (`MessageParameter` remains).
+`GuiGridView` has the largest gap among classes in active consumer use, but it is not alone: `GuiSession`, `GuiTextField`, `GuiComboBox` and `GuiStatusbar` are all in this table and all four are exercised by the reconstruction in `docs/spike/`. #88 (`GuiComboBox.Key`) was a gap in one of them and is wrapped since #114; #90 was a gap in another, now closed (message id, number, parameters and flags are wrapped).
 
 ## Classes not defined at all
 
