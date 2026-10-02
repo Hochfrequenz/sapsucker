@@ -210,14 +210,18 @@ def _safe_com_attr(com_obj: Any, attr: str, default: Any = None) -> Any:
 
 # SAP GUI component types probed on BDT containers. Derived from GuiComponentType so the
 # numbers cannot drift from the enum (they once did: issue #89).
+# Plain ints, because that is what is handed to COM.
 _BDT_PROBE_TYPES: list[int] = [
-    GuiComponentType.GuiTextField,
-    GuiComponentType.GuiCTextField,  # context/search field
-    GuiComponentType.GuiPasswordField,
-    GuiComponentType.GuiComboBox,
-    GuiComponentType.GuiRadioButton,
-    GuiComponentType.GuiCheckBox,
-    GuiComponentType.GuiLabel,
+    int(t)
+    for t in (
+        GuiComponentType.GuiTextField,
+        GuiComponentType.GuiCTextField,  # context/search field
+        GuiComponentType.GuiPasswordField,
+        GuiComponentType.GuiComboBox,
+        GuiComponentType.GuiRadioButton,
+        GuiComponentType.GuiCheckBox,
+        GuiComponentType.GuiLabel,
+    )
 ]
 
 
@@ -266,10 +270,13 @@ def _build_element_info(
 
 
 def _probe_bdt_fields(com_obj: Any) -> list[ElementInfo]:
-    """Discover fields on BDT containers via FindAllByNameEx wildcard.
+    """Probe BDT containers for fields via FindAllByNameEx wildcard.
 
     BDT-based screens (e.g. BP) don't expose children via the standard
-    Children collection. Fields ARE accessible via FindAllByNameEx("*", type_num).
+    Children collection, so this probes them via FindAllByNameEx("*", type_num).
+    Unverified that it finds anything: on SAP GUI against an S/4HANA system
+    (BP create person) the "*" wildcard returned 0 hits for every type while
+    exact names hit; see #118.
     """
     seen_ids: set[str] = set()
     result: list[ElementInfo] = []

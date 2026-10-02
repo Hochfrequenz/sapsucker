@@ -6,13 +6,16 @@ slow path (``dump_tree(use_fast_path=False)``, the one that calls ``_probe_bdt_f
 and prints the number of discovered elements per type. Only type names and counts are
 printed, never field values. Nothing is saved: the script leaves with /n and, if a
 "data will be lost" popup appears, answers it with No/discard.
+Run it in a dedicated session: on such a popup it answers No and may leave the session
+in transaction BP.
 
     uv run python scripts/probe_bdt_discovery.py
 
 It also calls ``FindAllByNameEx("*", n)`` directly on the user area for every probed
 type number and prints the hit counts, which is what ``_probe_bdt_fields`` relies on.
-Exit code 0 only if at least one of those wildcard queries returns a hit (i.e. the probe
-can discover something on this SAP GUI version); otherwise 1.
+Exit codes: 0 = ran and the wildcard queries find elements (the probe can discover
+something on this SAP GUI version); 2 = ran and the wildcard queries find nothing;
+1 = an uncaught exception (the script did not complete).
 """
 
 from __future__ import annotations
@@ -73,6 +76,7 @@ def main() -> int:
         session.find_by_id("wnd[0]/tbar[0]/okcd").text = "/nBP"
         session.find_by_id("wnd[0]").send_v_key(0)
         _wait_idle(session)
+        _close_popups(session)
         session.find_by_id("wnd[0]").send_v_key(5)  # F5 = create person
         _wait_idle(session)
         _close_popups(session)
@@ -90,17 +94,20 @@ def main() -> int:
             wildcard_hits += hits
             print(f"FindAllByNameEx('*', {int(type_num)}) on wnd[0]/usr: {hits} hits")
     finally:
-        session.find_by_id("wnd[0]/tbar[0]/okcd").text = "/n"
-        session.find_by_id("wnd[0]").send_v_key(0)
-        _wait_idle(session)
-        _close_popups(session)
+        try:
+            session.find_by_id("wnd[0]/tbar[0]/okcd").text = "/n"
+            session.find_by_id("wnd[0]").send_v_key(0)
+            _wait_idle(session)
+            _close_popups(session)
+        except Exception as exc:  # noqa: BLE001 - do not mask the original error
+            print(f"WARNING: cleanup failed: {exc}")
 
     radios = counts[GuiComponentType.GuiRadioButton.name]
     labels = counts[GuiComponentType.GuiLabel.name]
     print(f"radio buttons: {radios}, labels: {labels}, wildcard hits: {wildcard_hits}")
     ok = wildcard_hits > 0
-    print("RESULT:", "OK" if ok else "FAIL (wildcard FindAllByNameEx returned nothing)")
-    return 0 if ok else 1
+    print("RESULT:", "OK" if ok else "NO HITS (wildcard FindAllByNameEx returned nothing)")
+    return 0 if ok else 2
 
 
 if __name__ == "__main__":
