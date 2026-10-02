@@ -40,6 +40,30 @@ class TestGuiComboBoxEntry:
 
 
 class TestGuiComboBox:
+    def test_key_getter(self):
+        combo = _make_combo(Key="0002", Value="Second entry")
+        assert combo.key == "0002"
+        assert combo.value == "Second entry"
+
+    def test_key_setter_writes_com_key(self):
+        combo = _make_combo(Key="0001")
+        combo.key = "0002"
+        assert combo._com.Key == "0002"
+
+    def test_key_setter_does_not_touch_value(self):
+        combo = _make_combo(Value="Displayed text")
+        combo.key = "0002"
+        assert combo._com.Value == "Displayed text"
+
+    def test_key_is_a_real_property_not_a_plain_attribute(self):
+        assert isinstance(GuiComboBox.key, property)
+        assert GuiComboBox.key.fset is not None
+
+    def test_value_docstring_describes_displayed_text_not_key(self):
+        doc = GuiComboBox.value.__doc__ or ""
+        assert "Displayed text" in doc
+        assert "selected key" not in doc
+
     def test_value_getter(self):
         combo = _make_combo(Value="001")
         assert combo.value == "001"

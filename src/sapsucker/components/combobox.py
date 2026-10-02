@@ -38,17 +38,28 @@ class GuiComboBoxEntry:
 class GuiComboBox(GuiVComponent):
     """Wraps the COM GuiComboBox interface (TypeAsNumber 34).
 
-    A dropdown selection list. Set value by key string.
+    A dropdown selection list. Select an entry by its key via :attr:`key`;
+    :attr:`value` is the displayed text of the selected entry.
     """
 
     @property
+    def key(self) -> str:
+        """Key of the currently selected entry. Assign a key to select that entry."""
+        return str(self._com.Key)
+
+    @key.setter
+    def key(self, key: str) -> None:
+        self._com.Key = key
+
+    @property
     def value(self) -> str:
-        """Currently selected key value."""
+        """Displayed text/value of the currently selected entry (not its key; use :attr:`key`)."""
         return str(self._com.Value)
 
     @value.setter
-    def value(self, key: str) -> None:
-        self._com.Value = key
+    def value(self, value: str) -> None:
+        """Set the displayed text/value. To select an entry by key, set :attr:`key` instead."""
+        self._com.Value = value
 
     @property
     def entries(self) -> list[GuiComboBoxEntry]:
