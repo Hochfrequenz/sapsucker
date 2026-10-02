@@ -10,6 +10,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from sapsucker._errors import ElementNotFoundError
+from sapsucker._types import GuiComponentType
 from sapsucker._wrap import com_collection_item, wrap_com_object
 
 if TYPE_CHECKING:
@@ -207,15 +208,16 @@ def _safe_com_attr(com_obj: Any, attr: str, default: Any = None) -> Any:
         return default
 
 
-# SAP GUI type numbers for BDT field probe
-_BDT_PROBE_TYPES = [
-    31,  # GuiTextField
-    32,  # GuiCTextField (context/search field)
-    33,  # GuiPasswordField
-    34,  # GuiComboBox
-    42,  # GuiRadioButton
-    43,  # GuiCheckBox
-    46,  # GuiLabel
+# SAP GUI component types probed on BDT containers. Derived from GuiComponentType so the
+# numbers cannot drift from the enum (they once did: issue #89).
+_BDT_PROBE_TYPES: list[int] = [
+    GuiComponentType.GuiTextField,
+    GuiComponentType.GuiCTextField,  # context/search field
+    GuiComponentType.GuiPasswordField,
+    GuiComponentType.GuiComboBox,
+    GuiComponentType.GuiRadioButton,
+    GuiComponentType.GuiCheckBox,
+    GuiComponentType.GuiLabel,
 ]
 
 

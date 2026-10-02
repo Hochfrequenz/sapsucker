@@ -6,12 +6,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from sapsucker._errors import ElementNotFoundError
+from sapsucker._types import GuiComponentType
 from sapsucker.components.base import (
+    _BDT_PROBE_TYPES,
     GuiComponent,
     GuiContainer,
     GuiVComponent,
     GuiVContainer,
     _dump_tree_recursive,
+    _probe_bdt_fields,
 )
 from sapsucker.models import ElementInfo
 from unittests.conftest import make_mock_com
@@ -507,3 +510,33 @@ class TestDumpTreePerfLogging:
         assert result == []
         rec = next(r for r in caplog.records if r.message == "dump_tree")
         assert rec.container_id == "<unknown>"
+
+
+# ---------------------------------------------------------------------------
+# BDT probe (issue #89)
+# ---------------------------------------------------------------------------
+
+
+class TestBdtProbe:
+    EXPECTED = [
+        GuiComponentType.GuiTextField,
+        GuiComponentType.GuiCTextField,
+        GuiComponentType.GuiPasswordField,
+        GuiComponentType.GuiComboBox,
+        GuiComponentType.GuiRadioButton,
+        GuiComponentType.GuiCheckBox,
+        GuiComponentType.GuiLabel,
+    ]
+
+    def test_probe_types_are_the_expected_enum_members(self) -> None:
+        assert _BDT_PROBE_TYPES == self.EXPECTED
+        # literal numbers as documented by SAP GUI Scripting, independent of the enum
+        assert [int(t) for t in _BDT_PROBE_TYPES] == [31, 32, 33, 34, 41, 42, 30]
+
+    def test_probe_queries_find_all_by_name_ex_with_those_numbers(self) -> None:
+        com = MagicMock()
+        empty = MagicMock()
+        empty.Count = 0
+        com.FindAllByNameEx.return_value = empty
+        assert _probe_bdt_fields(com) == []
+        assert [c.args for c in com.FindAllByNameEx.call_args_list] == [("*", int(t)) for t in self.EXPECTED]
