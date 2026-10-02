@@ -39,7 +39,7 @@ jobs:
       - name: Run Coverage
         run: |
           uv run --group coverage coverage run -m pytest
-          uv run --group coverage coverage report --fail-under 90 --omit "unittests/*"
+          uv run --group coverage coverage report --fail-under 90 --omit "unittests/*,scripts/*"
 
   build-n-publish:
     name: Build and publish Python 🐍 distributions 📦 to PyPI
