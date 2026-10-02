@@ -69,7 +69,7 @@ Own members, reached / total:
 | `GuiComboBox` | 5 | 18 | `Key` wrapped since #114 |
 | `GuiCheckBox` | 5 | 17 | |
 | `GuiRadioButton` | 3 | 14 | |
-| `GuiStatusbar` | 1 | 9 | includes the message fields — see #90 |
+| `GuiStatusbar` | 1 | 9 | message fields wrapped since #116 (counts predate it) |
 
 `GuiCTextField` and `GuiPasswordField` are absent from the table, and the reason turned out not to be the one first given. The original draft said their rows were "the `GuiTextField` row restated". They are not — the tool reports:
 
@@ -89,7 +89,7 @@ The numbers are therefore not so much wrong as **not comparable**, and the "rest
 
 `diff_typelib.py` now marks any fallback row with `*` and prints what the mark means, because nothing in the output previously distinguished a first-choice resolution from a fallback. Read a marked row only against other marked rows.
 
-`GuiGridView` has the largest gap among classes in active consumer use, but it is not alone: `GuiSession`, `GuiTextField`, `GuiComboBox` and `GuiStatusbar` are all in this table and all four are exercised by the reconstruction in `docs/spike/`. #88 (`GuiComboBox.Key`) was a gap in one of them and is wrapped since #114; #90 is a gap in another.
+`GuiGridView` has the largest gap among classes in active consumer use, but it is not alone: `GuiSession`, `GuiTextField`, `GuiComboBox` and `GuiStatusbar` are all in this table and all four are exercised by the reconstruction in `docs/spike/`. #88 (`GuiComboBox.Key`) was a gap in one of them and is wrapped since #114; #90 was a gap in another, now closed (message id, number, parameters and flags are wrapped).
 
 ## Classes not defined at all
 
