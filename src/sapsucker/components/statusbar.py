@@ -25,8 +25,10 @@ class GuiStatusbar(GuiVComponent):
 
         The COM value is space-padded to 20 characters (observed ``"DS" + 18 spaces``);
         trailing spaces are stripped here. Observed ``""`` on an empty bar.
+
+        Not checked: a status-bar text with no T100 message behind it.
         """
-        return str(self._com.MessageId).rstrip()
+        return str(self._com.MessageId).rstrip(" ")
 
     @property
     def message_number(self) -> str:
@@ -40,24 +42,23 @@ class GuiStatusbar(GuiVComponent):
     def message_as_popup(self) -> bool:
         """Whether the message was raised as a popup rather than in the status bar.
 
-        Observed ``False`` for the messages checked live; the ``True`` case was not reproduced.
+        Per the SAP GUI Scripting API documentation. Only ``False`` observed live.
         """
         return bool(self._com.MessageAsPopup)
 
     @property
     def message_has_long_text(self) -> bool:
-        """Whether the current message has a long text that can be fetched.
+        """Per the SAP GUI Scripting API documentation, whether the message has a long text.
 
-        Observed live: ``True`` for message DS 017 (SE38, program does not exist), ``False``
-        for S# 343 (transaction does not exist).
+        Observed live: ``True`` for DS 017, ``False`` for S# 343.
         """
         return bool(self._com.MessageHasLongText)
 
     def message_parameter(self, index: int) -> str:
         """Return the message parameter (``&1`` .. ``&4`` placeholder value) at ``index``.
 
-        ``MessageParameter`` is a COM method, not an indexed property. Returns ``""`` for
-        unset parameters (observed for indices up to 9; no exception was raised).
+        Index 0 observed as the ``&1`` value. The T100 message variables are ``&1``–``&4``;
+        indices up to 9 returned ``""`` without raising.
         """
         return str(self._com.MessageParameter(index))
 

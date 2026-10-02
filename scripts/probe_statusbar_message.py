@@ -9,6 +9,8 @@ Two cases are run and every wrapped status-bar message member is printed:
 2. SE38 display of a non-existent program: expected message_type "E", message_id
    "DS", message_number "017", message_parameter(0) == the program name.
 
+This script runs /n commands in the used session, which discards any unsaved work there.
+
     uv run python scripts/probe_statusbar_message.py
 
 Exit code 0 only if both cases match those expectations. Anything else (including
@@ -23,16 +25,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sapsucker import SapGui  # noqa: E402
+from sapsucker.components.statusbar import GuiStatusbar
 
 TX = "ZZNOSUCHTX"
 PROG = "ZZNOSUCHPROG"
 
 
-def _read(bar: object, label: str) -> bool:
+def _read(bar: GuiStatusbar, label: str) -> bool:
     """Print every wrapped member; return True if reading any of them raised."""
     raised = False
     print(f"--- {label} ---")
-    print(f"text: {bar.text!r}")  # type: ignore[attr-defined]
+    print(f"text: {bar.text!r}")
     for name in ("message_type", "message_id", "message_number", "message_as_popup", "message_has_long_text"):
         try:
             value = getattr(bar, name)
@@ -40,24 +43,24 @@ def _read(bar: object, label: str) -> bool:
         except Exception as exc:  # noqa: BLE001 - a probe must report, not crash
             raised = True
             print(f"{name}: RAISED {type(exc).__name__}: {exc}")
-    for i in range(4):
+    for i in range(10):
         try:
-            print(f"message_parameter({i}): {bar.message_parameter(i)!r}")  # type: ignore[attr-defined]
+            print(f"message_parameter({i}): {bar.message_parameter(i)!r}")
         except Exception as exc:  # noqa: BLE001
             raised = True
             print(f"message_parameter({i}): RAISED {type(exc).__name__}: {exc}")
     return raised
 
 
-def _check(bar: object, label: str, mtypes: tuple[str, ...], mid: str, mnum: str, param0: str) -> bool:
+def _check(bar: GuiStatusbar, label: str, mtypes: tuple[str, ...], mid: str, mnum: str, param0: str) -> bool:
     """Return True if the case failed."""
     failed = _read(bar, label)
     try:
         actual = (
-            bar.message_type,  # type: ignore[attr-defined]
-            bar.message_id,  # type: ignore[attr-defined]
-            bar.message_number,  # type: ignore[attr-defined]
-            bar.message_parameter(0),  # type: ignore[attr-defined]
+            bar.message_type,
+            bar.message_id,
+            bar.message_number,
+            bar.message_parameter(0),
         )
     except Exception:  # noqa: BLE001
         return True
@@ -71,7 +74,7 @@ def main() -> int:
     app = SapGui.connect()
     try:
         session = app.active_session
-    except AttributeError:  # no SAP GUI window has focus; fall back to the first session
+    except Exception:  # no SAP GUI window has focus; fall back to the first session
         session = app.connections[0].sessions[0]
 
     failed = False

@@ -69,7 +69,7 @@ Own members, reached / total:
 | `GuiComboBox` | 5 | 18 | `Key` wrapped since #114 |
 | `GuiCheckBox` | 5 | 17 | |
 | `GuiRadioButton` | 3 | 14 | |
-| `GuiStatusbar` | 1 | 9 | includes the message fields — see #90 |
+| `GuiStatusbar` | 1 | 9 | message fields wrapped since #116 (counts predate it) |
 
 `GuiCTextField` and `GuiPasswordField` are absent from the table, and the reason turned out not to be the one first given. The original draft said their rows were "the `GuiTextField` row restated". They are not — the tool reports:
 

@@ -41,8 +41,9 @@ class TestGuiStatusbar:
         padded = "DS" + " " * 18
         assert _make_statusbar(MessageId=padded).message_id == "DS"
 
-    def test_message_id_keeps_leading_characters(self):
+    def test_message_id_keeps_non_space_characters(self):
         assert _make_statusbar(MessageId="S#" + " " * 18).message_id == "S#"
+        assert _make_statusbar(MessageId=" DS   " + " " * 13).message_id == " DS"
 
     def test_message_number_keeps_zero_padding(self):
         assert _make_statusbar(MessageNumber="017").message_number == "017"
