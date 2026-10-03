@@ -729,6 +729,7 @@ coverage = [
     { name = "pydantic-settings" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "typer" },
 ]
 dev = [
     { name = "codespell" },
@@ -750,6 +751,7 @@ tests = [
     { name = "pydantic-settings" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "typer" },
 ]
 type-check = [
     { name = "mypy" },
@@ -775,6 +777,7 @@ coverage = [
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "typer", specifier = ">=0.12" },
 ]
 dev = [
     { name = "codespell", specifier = "==2.4.3" },
@@ -792,6 +795,7 @@ tests = [
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "typer", specifier = ">=0.12" },
 ]
 type-check = [
     { name = "mypy", specifier = "==2.3.1" },
