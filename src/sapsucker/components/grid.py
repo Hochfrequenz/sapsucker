@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from sapsucker.components.shell import GuiShell
 
 __all__ = ["GuiGridView"]
@@ -78,6 +80,46 @@ class GuiGridView(GuiShell):
         """Read the value of a cell."""
         return str(self._com.GetCellValue(row, column))
 
+    def to_dicts(
+        self,
+        columns: list[str] | None = None,
+        page_size: int = 100,
+        on_page: Callable[[int, int], None] | None = None,
+    ) -> list[dict[str, str]]:
+        """Read ALL rows, paging through the grid's loaded window.
+
+        A GuiGridView only holds the rows SAP GUI has transferred to the
+        frontend (the visible scroll window); ``get_cell_value`` for a row
+        outside it returns blank. Reading ``row_count`` rows unpaged therefore
+        yields a silent PREFIX of a large grid (issue #91). This method pages
+        by setting ``FirstVisibleRow`` forward and reading the loaded window at
+        each stop, so callers get every row.
+
+        Args:
+            columns: Columns to read (default: ``column_order``).
+            page_size: Rows advanced per page. Must be at least the number of
+                rows the grid loads per scroll step; 100 is a safe default for
+                SE16N-sized ALVs.
+            on_page: Optional progress callback ``(first_row, next_first)``.
+        """
+        if page_size < 1:
+            raise ValueError(f"page_size must be >= 1, got {page_size}")
+        if columns is None:
+            columns = self.column_order
+        total = self.row_count
+        rows: list[dict[str, str]] = []
+        first = 0
+        while first < total:
+            self.first_visible_row = first
+            page_end = min(first + page_size, total)
+            for row in range(first, page_end):
+                rows.append({col: self.get_cell_value(row, col) for col in columns})
+            if on_page is not None:
+                on_page(first, page_end)
+            first = page_end
+        self.first_visible_row = 0
+        return rows
+
     def set_cell_value(self, row: int, column: str, value: str) -> None:
         """Write a value to a cell (calls ModifyCell on COM)."""
         self._com.ModifyCell(row, column, value)
@@ -147,6 +189,14 @@ class GuiGridView(GuiShell):
     def press_toolbar_context_button(self, button_id: str) -> None:
         """Press a toolbar context button (opens dropdown)."""
         self._com.PressToolbarContextButton(button_id)
+
+    def press_f4(self) -> None:
+        """Trigger F4 (value help) on the current cell.
+
+        Clicking the value-help dropdown in an ALV cell is PressF4 on the grid
+        as far as the scripting API is concerned.
+        """
+        self._com.PressF4()
 
     def context_menu(self) -> None:
         """Open the context menu on the current cell."""

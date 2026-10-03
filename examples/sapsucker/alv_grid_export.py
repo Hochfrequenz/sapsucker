@@ -58,11 +58,10 @@ def main(session: Any = None) -> None:
     print(f"Columns: {columns}")
     print()
 
-    # Read all rows
-    for row in range(grid.row_count):
-        values = {}
-        for col in columns:
-            values[col] = grid.get_cell_value(row, col)
+    # Read ALL rows - to_dicts pages through the grid's loaded window, so
+    # large grids are not truncated to the rows currently loaded in the
+    # frontend (get_cell_value returns blank outside that window).
+    for values in grid.to_dicts(columns=columns):
         print(values)
 
     # Go back
