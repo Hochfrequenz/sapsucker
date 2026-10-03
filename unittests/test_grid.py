@@ -60,3 +60,12 @@ class TestGuiGridViewColumnInfo:
         grid = _make_grid()
         grid._com.GetColumnDataType.return_value = "CHAR"
         assert grid.get_column_data_type("COL") == "CHAR"
+
+
+class TestGuiGridViewPress:
+    def test_press_f4(self):
+        """Issue #92: value help on the current ALV cell maps to PressF4."""
+        grid = _make_grid()
+        assert hasattr(grid, "press_f4"), "GuiGridView.press_f4 is missing"
+        grid.press_f4()
+        grid._com.PressF4.assert_called_once()

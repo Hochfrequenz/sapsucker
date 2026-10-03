@@ -6,6 +6,7 @@ on the result. All tests are read-only.
 
 import sys
 import time
+from typing import Any, cast
 
 import pytest
 
@@ -160,3 +161,32 @@ class TestGuiGridViewSelection:
         assert se16n_grid.selected_rows != ""
         se16n_grid.clear_selection()
         assert se16n_grid.selected_rows == ""
+
+
+class TestGuiGridViewPressF4:
+    def test_press_f4_opens_value_help(self, se16n_grid, sap_desktop_session):
+        """Issue #92: PressF4 on a cell with a search help opens the value help."""
+        # Pick a cell in the MWAER column (currency/unit, carries a search help);
+        # fall back to the current cell if MWAER is not a column of this table.
+        try:
+            se16n_grid.current_cell_row = 0
+            se16n_grid.current_cell_column = "MWAER"
+        except Exception:
+            se16n_grid.current_cell_row = 0
+            se16n_grid.current_cell_column = se16n_grid.column_order[0]
+        se16n_grid.press_f4()
+        time.sleep(1)
+        # The value help opens as a modal window wnd[1] (F4 dialog).
+        modal = None
+        try:
+            modal = sap_desktop_session.find_by_id("wnd[1]", raise_error=False)
+        except Exception:
+            modal = None
+        if modal is None:
+            pytest.fail("press_f4 did not open a value-help window (wnd[1] absent)")
+        # Close the value help again (Esc / F12).
+        try:
+            cast(Any, sap_desktop_session.find_by_id("wnd[1]")).send_v_key(12)
+        except Exception:
+            pass
+        time.sleep(0.5)
