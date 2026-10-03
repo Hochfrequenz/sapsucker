@@ -148,6 +148,14 @@ class GuiGridView(GuiShell):
         """Press a toolbar context button (opens dropdown)."""
         self._com.PressToolbarContextButton(button_id)
 
+    def press_f4(self) -> None:
+        """Trigger F4 (value help) on the current cell.
+
+        Clicking the value-help dropdown in an ALV cell is PressF4 on the grid
+        as far as the scripting API is concerned.
+        """
+        self._com.PressF4()
+
     def context_menu(self) -> None:
         """Open the context menu on the current cell."""
         self._com.ContextMenu()
