@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from sapsucker.components.base import GuiContainer
 from sapsucker.components.session import GuiSession, GuiSessionInfo
 from unittests.conftest import make_mock_com
@@ -194,3 +196,58 @@ class TestGuiSessionInfo:
         assert "100" in r
         assert "TEST" in r
         assert "SE38" in r
+
+
+class TestGuiSessionRecording:
+    """Issue #125: RecordFile/Record wrapper (filename rules verified live)."""
+
+    def test_start_recording_sets_recordfile_then_record_and_returns_resolved_path(self):
+        com = make_mock_com()
+        events: list[tuple[str, object]] = []
+        type(com).RecordFile = property(
+            lambda _: r"C:\Scripts\JOURNEY3.VBS", lambda _, v: events.append(("RecordFile", v))
+        )
+        type(com).Record = property(lambda _: False, lambda _, v: events.append(("Record", v)))
+        resolved = GuiSession(com).start_recording("journey3.vbs")
+        assert events == [("RecordFile", "journey3.vbs"), ("Record", True)]
+        assert resolved == r"C:\Scripts\JOURNEY3.VBS"
+
+    @pytest.mark.parametrize("name", ["journey3.vbs", "abc", "1abc.vbs", "A.TXT"])
+    def test_accepts_names_sap_gui_accepts(self, name):
+        com = make_mock_com()
+        GuiSession(com).start_recording(name)
+        assert com.RecordFile == name
+
+    @pytest.mark.parametrize(
+        "name", ["my_journey.vbs", "my-name.vbs", "a b.vbs", "x.y.vbs", "", r"C:\x.vbs", "a/b.vbs"]
+    )
+    def test_rejects_names_sap_gui_rejects_before_touching_com(self, name):
+        com = make_mock_com()
+        com.Record = False
+        with pytest.raises(ValueError, match="invalid recording filename"):
+            GuiSession(com).start_recording(name)
+        assert com.Record is False
+
+    def test_stop_recording_clears_record(self):
+        com = make_mock_com()
+        com.Record = True
+        GuiSession(com).stop_recording()
+        assert com.Record is False
+
+    def test_is_recording_reflects_com_state(self):
+        com = make_mock_com()
+        com.Record = False
+        session = GuiSession(com)
+        assert session.is_recording is False
+        com.Record = True
+        assert session.is_recording is True
+
+    def test_com_error_propagates(self):
+        com = make_mock_com()
+
+        def refuse(_, value):
+            raise RuntimeError("recording disabled")
+
+        type(com).RecordFile = property(lambda _: "x", refuse)
+        with pytest.raises(RuntimeError, match="recording disabled"):
+            GuiSession(com).start_recording("journey.vbs")

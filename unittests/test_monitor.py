@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+import time
 from datetime import timedelta
 from itertools import islice
 from typing import Any
@@ -386,3 +387,17 @@ class TestStatusbarSampling:
         sample = _take(SessionMonitor(session, interval=0, sample_statusbar=False), 1)[0]
         assert "sbar_type" not in sample.values
         assert "sbar_text" not in sample.values
+
+
+class TestSharedOrigin:
+    """#125: elapsed is measured from a caller-supplied monotonic origin."""
+
+    def test_elapsed_is_measured_from_the_given_origin(self):
+        origin = time.monotonic() - 100.0
+        monitor = SessionMonitor(FakeSession([{"focus": "a"}]), interval=0)
+        sample = next(monitor.samples(origin=origin))
+        assert sample.elapsed >= timedelta(seconds=100)
+
+    def test_origin_defaults_to_sampling_start(self):
+        monitor = SessionMonitor(FakeSession([{"focus": "a"}]), interval=0)
+        assert next(monitor.samples()).elapsed < timedelta(seconds=5)

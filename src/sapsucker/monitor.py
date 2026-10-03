@@ -282,8 +282,14 @@ class SessionMonitor:
             "sbar_text": str(raw.Text),
         }
 
-    def samples(self) -> Iterator[Sample]:
+    def samples(self, origin: float | None = None) -> Iterator[Sample]:
         """Yield samples forever, one every ``interval`` seconds.
+
+        Args:
+            origin: A ``time.monotonic()`` reading that ``elapsed`` is measured
+                from. Defaults to the moment sampling starts. Pass a reading
+                taken *before* starting a recorder so both share one origin
+                (``sapsucker-monitor --record``).
 
         The caller owns the loop: break out of it, or wrap it in a timeout. The
         generator sleeps between samples, so it also owns the thread.
@@ -293,7 +299,7 @@ class SessionMonitor:
             what makes the log analysable after the fact; a change-detector was
             the bug in the first version of this.
         """
-        started = time.monotonic()
+        started = time.monotonic() if origin is None else origin
         previous: dict[str, Any] | None = None
         last_change_at = started
 

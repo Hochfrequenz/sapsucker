@@ -12,6 +12,8 @@ recorder, stop the monitor. Hand over the ``.vbs`` and the ``.jsonl`` together.
 from __future__ import annotations
 
 import json
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -110,6 +112,19 @@ def main(
             help="Skip status-bar sampling (sbar_type/id/number/text) — for the cost-sensitive case.",
         ),
     ] = False,
+    record: Annotated[
+        str | None,
+        typer.Option(
+            "--record",
+            "-r",
+            metavar="NAME",
+            help=(
+                "Also start SAP GUI's script recorder, writing NAME (letters/digits, one dot, "
+                "e.g. journey3.vbs) to the SAP GUI Scripts folder. Writes a header line to the JSONL "
+                "with the measured recorder skew."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Sample the live session until interrupted, writing one JSON object per sample."""
     if selftest:
@@ -152,14 +167,46 @@ def main(
         typer.secho(f"cannot write {out}: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 
+    # The recorder and the sampler start sequentially, so elapsed == 0 is NOT the
+    # recording start. Take one monotonic origin before the recorder call and record
+    # how long the recorder took to start; the header makes the offset a constant.
+    origin = time.monotonic()
+    origin_at = datetime.now(UTC).astimezone()
+    recording_path: str | None = None
+    skew: float | None = None
+    if record is not None:
+        try:
+            recording_path = session.start_recording(record)
+        except ValueError as exc:
+            typer.secho(f"bad --record: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=2) from exc
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            typer.secho(
+                f"cannot start the recorder: {exc}\n"
+                "  Recording may be disabled (RZ11 sapgui/user_scripting_disable_recording = TRUE).",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        skew = round(time.monotonic() - origin, 3)
+        typer.echo(f"recording -> {recording_path}   (recorder started {skew}s after the sampler origin)")
     typer.echo(f"sampling every {interval}s -> {out}   (Ctrl+C to stop)")
     written = 0
     changes = 0
     stopped: str | None = None
 
     with handle:
+        if recording_path is not None:
+            header = {
+                "record_type": "header",
+                "origin_at": origin_at.isoformat(),
+                "recording_file": recording_path,
+                "recorder_skew": skew,
+            }
+            handle.write(json.dumps(header, ensure_ascii=False) + "\n")
+            handle.flush()
         try:
-            for sample in monitor.samples():
+            for sample in monitor.samples(origin=origin):
                 handle.write(json.dumps(sample.as_record(), ensure_ascii=False) + "\n")
                 handle.flush()  # survive a hard Ctrl+C
                 written += 1
@@ -184,6 +231,13 @@ def main(
             # Report the count first: the log written so far is still usable, and
             # it is the user's only confirmation that it pairs with a recording.
             stopped = f"{exc.__class__.__name__}: {exc}"
+        finally:
+            if recording_path is not None:
+                try:
+                    session.stop_recording()
+                    typer.echo(f"recording saved: {recording_path}")
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    typer.secho(f"could not stop the recorder: {exc}", fg=typer.colors.YELLOW, err=True)
 
     typer.echo(f"wrote {written} sample(s), {changes} change(s) to {out}")
     if stopped is not None:
