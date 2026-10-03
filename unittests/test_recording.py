@@ -125,3 +125,75 @@ class TestUtf16Loading:
         tmp.write_bytes('session.findById("wnd[0]").press\n'.encode("utf-16-le"))
         rec = Recording.load(str(tmp))
         assert rec.steps[0].member == "press"
+
+
+class TestByteRoundTrip:
+    """render_bytes must reproduce the loaded file's bytes (codec + BOM + CRLF)."""
+
+    SRC = 'session.findById("wnd[0]").press\n'
+
+    def test_utf16_le_bom(self, tmp_path):
+        p = tmp_path / "r.vbs"
+        p.write_bytes(b"\xff\xfe" + self.SRC.encode("utf-16-le"))
+        rec = Recording.load(str(p))
+        assert rec.render_bytes() == p.read_bytes()
+
+    def test_utf16_be_bom(self, tmp_path):
+        p = tmp_path / "r.vbs"
+        p.write_bytes(b"\xfe\xff" + self.SRC.encode("utf-16-be"))
+        rec = Recording.load(str(p))
+        assert rec.render_bytes() == p.read_bytes()
+
+    def test_utf16_le_bomless(self, tmp_path):
+        p = tmp_path / "r.vbs"
+        p.write_bytes(self.SRC.encode("utf-16-le"))
+        rec = Recording.load(str(p))
+        assert rec.render_bytes() == p.read_bytes()
+
+    def test_utf8_bom(self, tmp_path):
+        p = tmp_path / "r.vbs"
+        p.write_bytes(b"\xef\xbb\xbf" + self.SRC.encode("utf-8"))
+        rec = Recording.load(str(p))
+        assert rec.render_bytes() == p.read_bytes()
+
+    def test_utf8_no_bom_crlf(self, tmp_path):
+        p = tmp_path / "r.vbs"
+        data = self.SRC.replace("\n", "\r\n").encode("utf-8")
+        p.write_bytes(data)
+        rec = Recording.load(str(p))
+        assert rec.newline == "\r\n"
+        assert rec.render_bytes() == data
+
+    def test_parse_has_no_codec(self):
+        rec = Recording.parse(self.SRC)
+        with pytest.raises(ValueError, match="render_bytes"):
+            rec.render_bytes()
+
+    def test_line_continuation(self):
+        src = 'session.findById("wnd[0]/usr/txtF").text = _\n"continued value"\n'
+        rec = Recording.parse(src)
+        assert len(rec.steps) == 1
+        assert rec.steps[0].member == "text"
+        assert rec.steps[0].args == ("continued value",)
+        assert rec.steps[0].raw == 'session.findById("wnd[0]/usr/txtF").text = _\n"continued value"'
+
+    def test_continuation_inside_string_is_not_joined(self):
+        src = 'session.findById("wnd[0]/usr/txtF").text = "ends with _"\n'
+        rec = Recording.parse(src)
+        assert rec.steps[0].args == ("ends with _",)
+
+    def test_preamble_needs_all_markers(self):
+        rec = Recording.parse('Set x = GetObject("SAPGUI")\nsession.findById("wnd[0]").press\n')
+        assert rec.preamble_is_guarded is False
+
+    def test_preamble_full_guard(self):
+        preamble = (
+            "If Not IsObject(application) Then\n"
+            '   Set SapGuiAuto  = GetObject("SAPGUI")\n'
+            "End If\n"
+            "If IsObject(WScript) Then\n"
+            '   WScript.ConnectObject session,     "on"\n'
+            "End If\n"
+        )
+        rec = Recording.parse(preamble + 'session.findById("wnd[0]").press\n')
+        assert rec.preamble_is_guarded is True

@@ -114,8 +114,11 @@ def _scan_quoted(text: str, start: int) -> tuple[str, int]:
     raise ValueError("unterminated string")
 
 
-def _parse_statement(line: str, line_no: int) -> RecordingStep:
+def _parse_statement(line: str, line_no: int, raw: str | None = None) -> RecordingStep:
     """Parse one ``session.findById("...").<member>...`` statement.
+
+    ``raw`` overrides the statement's source text (line continuations keep
+    their original two-line form there); defaults to *line*.
 
     Grammar (member invocation forms; see the plan doc for evidence):
 
@@ -151,28 +154,29 @@ def _parse_statement(line: str, line_no: int) -> RecordingStep:
         raise RecordingParseError(line_no, stripped, "missing member name")
     rest = rest[j:].strip()
 
+    source_text = raw if raw is not None else line
     if not rest:
-        return RecordingStep(element_id, member, None, line, line_no)
+        return RecordingStep(element_id, member, None, source_text, line_no)
 
     if rest.startswith("="):
         value_src = rest[1:].strip()
         value = _parse_value(value_src, line_no, stripped)
-        return RecordingStep(element_id, member, (value,), line, line_no)
+        return RecordingStep(element_id, member, (value,), source_text, line_no)
 
     if rest.startswith("("):
         if not rest.endswith(")"):
             raise RecordingParseError(line_no, stripped, "unbalanced parenthesis in argument list")
         inner = rest[1:-1].strip()
         if not inner:
-            return RecordingStep(element_id, member, (), line, line_no)
-        return RecordingStep(element_id, member, _parse_arglist(inner, line_no, stripped), line, line_no)
+            return RecordingStep(element_id, member, (), source_text, line_no)
+        return RecordingStep(element_id, member, _parse_arglist(inner, line_no, stripped), source_text, line_no)
 
     # Bare (unparenthesised) arguments: the corpus's sendVKey/resizeWorkingPane form.
     args = _parse_arglist(rest, line_no, stripped)
     for arg in args:
         if not (arg[:1].isdigit() or arg[:1].isalpha()) and arg not in ("true", "false", "-"):
             raise RecordingParseError(line_no, stripped, f"unexpected token in bare arguments: {rest!r}")
-    return RecordingStep(element_id, member, args, line, line_no)
+    return RecordingStep(element_id, member, args, source_text, line_no)
 
 
 def _parse_value(src: str, line_no: int, whole: str) -> str:
@@ -195,10 +199,25 @@ def _parse_value(src: str, line_no: int, whole: str) -> str:
 
 
 def _parse_arglist(src: str, line_no: int, whole: str) -> tuple[str, ...]:
-    """Parse a comma-separated argument list (quoted strings may contain commas)."""
+    """Parse a comma-separated argument list (quoted strings may contain commas).
+
+    Empty slots (``m(,1)``, ``m(1,)``) are rejected — the recorder never emits
+    them, and silently dropping or padding an argument would corrupt the
+    recorded call.
+    """
     args: list[str] = []
     i = 0
     current: list[str] = []
+    value_seen = False
+
+    def _flush() -> None:
+        nonlocal current, value_seen
+        if not value_seen:
+            raise RecordingParseError(line_no, whole, f"empty argument slot in {src!r}")
+        args.append("".join(current))
+        current = []
+        value_seen = False
+
     while i < len(src):
         ch = src[i]
         if ch == '"':
@@ -207,17 +226,19 @@ def _parse_arglist(src: str, line_no: int, whole: str) -> tuple[str, ...]:
             except ValueError as exc:
                 raise RecordingParseError(line_no, whole, f"bad string argument: {exc}") from exc
             current.append(value)
+            value_seen = True
             continue
         if ch == ",":
-            args.append("".join(current).strip())
-            current = []
+            _flush()
             i += 1
             continue
+        if not value_seen and ch.isspace():
+            i += 1  # leading whitespace before a value starts
+            continue
         current.append(ch)
+        value_seen = True
         i += 1
-    last = "".join(current).strip()
-    if last:
-        args.append(last)
+    _flush()
     if not args:
         raise RecordingParseError(line_no, whole, "empty argument list")
     return tuple(args)
@@ -226,8 +247,26 @@ def _parse_arglist(src: str, line_no: int, whole: str) -> tuple[str, ...]:
 _PREAMBLE_SNIPPETS = ("IsObject(application)", 'GetObject("SAPGUI")', "WScript.ConnectObject")
 
 
-def _looks_like_preamble(line: str) -> bool:
-    return any(snippet in line for snippet in _PREAMBLE_SNIPPETS)
+def _ends_with_continuation(line: str) -> bool:
+    """True if *line* ends with a VBScript ``_`` continuation (outside a string)."""
+    stripped = line.rstrip()
+    if not stripped or stripped.endswith('"'):
+        # Ends inside/just after a string: the `_` would be part of it, not a marker.
+        # Count quotes: an even number means we are outside a string at EOL.
+        return False
+    if not stripped.endswith("_"):
+        return False
+    # The `_` must not be inside a string literal: count unescaped quotes.
+    quotes = 0
+    i = 0
+    while i < len(stripped) - 1:
+        if stripped[i] == '"':
+            if i + 1 < len(stripped) and stripped[i + 1] == '"':
+                i += 2
+                continue
+            quotes += 1
+        i += 1
+    return quotes % 2 == 0
 
 
 @dataclass
@@ -246,46 +285,73 @@ class Recording:
     path: str | None = None
     #: Line separator detected from the source file (load) or LF (parse).
     newline: str = "\n"
+    #: Byte codec detected from the source file (load); ``None`` when parsed
+    #: from text. ``render_bytes`` reapplies it so the output byte-matches.
+    codec: str | None = None
+    #: Whether the source carried a byte-order mark (load).
+    bom: bool = False
 
     @classmethod
     def load(cls, path: str | Path) -> Recording:
         """Load and parse a recording file.
 
         The recorder writes UTF-16 by default (observed on this corpus) and
-        plain ASCII/UTF-8 variants exist; the codec is sniffed per file.
+        plain ASCII/UTF-8 variants exist; the codec is sniffed per file and
+        recorded on the model so :meth:`render_bytes` can reproduce the bytes.
         """
         path = Path(path)
         raw = path.read_bytes()
+        codec: str
+        bom = True
         if raw.startswith(b"\xff\xfe"):
-            text = raw.decode("utf-16-le")
+            codec, text = "utf-16-le", raw[2:].decode("utf-16-le")
         elif raw.startswith(b"\xfe\xff"):
-            text = raw.decode("utf-16-be")
+            codec, text = "utf-16-be", raw[2:].decode("utf-16-be")
         elif raw.startswith(b"\xef\xbb\xbf"):
-            text = raw.decode("utf-8-sig")
+            codec, text = "utf-8", raw[3:].decode("utf-8")
         elif b"\x00" in raw[:64]:
             # BOM-less UTF-16-LE (observed from some toolchains writing the file).
-            text = raw.decode("utf-16-le")
+            codec, bom, text = "utf-16-le", False, raw.decode("utf-16-le")
         else:
-            text = raw.decode("utf-8")
+            codec, bom, text = "utf-8", False, raw.decode("utf-8")
         rec = cls.parse(text)
         rec.newline = "\r\n" if b"\r\n" in raw else "\n"
+        rec.codec = codec
+        rec.bom = bom
         rec.path = str(path)
         return rec
 
     @classmethod
     def parse(cls, text: str) -> Recording:
-        """Parse recording text (any line-ending style)."""
+        """Parse recording text (any line-ending style).
+
+        VBScript line continuations (a statement whose last non-comment
+        character is ``_``, outside a string) are joined with the following
+        line before parsing; the joined statement's ``raw`` keeps the source
+        lines joined with a space so rendering stays byte-exact.
+        """
         lines = text.splitlines()
         rec = cls()
         seen_first_statement = False
-        for idx, line in enumerate(lines, start=1):
+        idx = 1
+        pos = 0
+        while pos < len(lines):
+            logical = lines[pos]
+            raw_statement = logical
+            first_line_no = idx
+            while _ends_with_continuation(logical) and pos + 1 < len(lines):
+                pos += 1
+                idx += 1
+                logical = logical.rstrip()[:-1].rstrip() + " " + lines[pos].lstrip()
+                raw_statement = raw_statement + "\n" + lines[pos]
+            line = logical
             if not seen_first_statement:
                 if "findById" in line and "session.findById" in line:
                     for chunk in _split_top_level_colons(line):
                         statement = chunk.strip()
                         if not statement:
                             continue
-                        rec.steps.append(_parse_statement(statement, idx))
+                        rec.steps.append(_parse_statement(statement, first_line_no, raw_statement))
                     seen_first_statement = True
                 else:
                     rec.prologue.append(line)
@@ -294,9 +360,11 @@ class Recording:
                     statement = part.strip()
                     if not statement:
                         continue
-                    rec.steps.append(_parse_statement(statement, idx))
+                    rec.steps.append(_parse_statement(statement, first_line_no, raw_statement))
             else:
                 rec.epilogue.append(line)
+            pos += 1
+            idx += 1
         if not rec.steps:
             raise RecordingParseError(len(lines), text[:200], "no findById statements found")
         return rec
@@ -311,7 +379,24 @@ class Recording:
             return ""
         return self.newline.join(out_lines) + self.newline
 
+    def render_bytes(self) -> bytes:
+        """Re-render to bytes that match the loaded file (codec + BOM reapplied).
+
+        Raises ValueError when the model was built via :meth:`parse` (no codec
+        known) instead of :meth:`load`.
+        """
+        if self.codec is None:
+            raise ValueError("render_bytes() requires a Recording built by load(); parse() has no codec")
+        bom_map = {"utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff", "utf-8": b"\xef\xbb\xbf"}
+        prefix = bom_map[self.codec] if self.bom else b""
+        return prefix + self.render().encode(self.codec)
+
     @property
     def preamble_is_guarded(self) -> bool:
-        """Whether the prologue contains the recorder's guarded connect preamble."""
-        return any(_looks_like_preamble(line) for line in self.prologue)
+        """Whether the prologue contains all markers of the guarded connect preamble.
+
+        A single marker (e.g. a stray ``GetObject("SAPGUI")`` line) is not the
+        recorder's guarded preamble — all of them must be present.
+        """
+        prologue_text = "\n".join(self.prologue)
+        return all(snippet in prologue_text for snippet in _PREAMBLE_SNIPPETS)
