@@ -114,6 +114,8 @@ tests = [
     "pytest==9.1.1",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
+    # unittests/test_monitor_cli.py drives the typer CLI.
+    { include-group = "cli_group" },
 ]
 linting = [
     "ruff==0.16.9",

@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sapsucker._wrap import wrap_com_object
 from sapsucker.components.base import GuiComponent, GuiContainer
 
-__all__ = ["GuiSession", "GuiSessionInfo"]
+__all__ = ["GuiSession", "GuiSessionInfo", "validate_recording_filename"]
+
+# Verified live against SAP GUI: letters/digits and at most one dot; "_", "-", " " and a
+# second dot are rejected by RecordFile with "The method got an invalid argument".
+_RECORD_FILENAME = re.compile(r"[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?")
+
+
+def validate_recording_filename(filename: str) -> None:
+    """Raise ``ValueError`` unless SAP GUI's ``RecordFile`` accepts ``filename``."""
+    if not _RECORD_FILENAME.fullmatch(filename):
+        raise ValueError(
+            f"invalid recording filename {filename!r}: SAP GUI accepts only ASCII letters and digits "
+            "with at most one dot (no path, underscore, hyphen or space), e.g. 'journey3.vbs'"
+        )
 
 
 class GuiSessionInfo:
@@ -161,6 +175,66 @@ class GuiSession(GuiContainer):
     def send_command_async(self, command: str) -> None:
         """Execute a command string asynchronously."""
         self._com.SendCommandAsync(command)
+
+    # --- Script recording (issue #125) ---
+
+    def start_recording(self, filename: str) -> str:
+        r"""Start recording this session's user interactions to a ``.vbs`` file.
+
+        Drives SAP GUI's built-in recorder through the COM API
+        (``ISapSessionTarget.RecordFile`` / ``Record`` - the same feature as
+        Alt+F12 -> *Script Recording and Playback*). Pair it with
+        :mod:`sapsucker.monitor` to capture *when* alongside *what*
+        (``sapsucker-monitor --record``).
+
+        Args:
+            filename: A bare filename WITHOUT path. Verified live: ASCII
+                letters and digits with at most one dot (``journey3.vbs``).
+                Underscores, hyphens, spaces and a second dot are rejected by
+                SAP GUI ("The method got an invalid argument"), so they are
+                rejected here with a clear message. The file lands in the SAP
+                GUI Scripts folder on the client (registry
+                ``HKCU\SOFTWARE\SAP\SAPGUI Front\SAP Frontend
+                Server\Scripting\SaveScriptTo``) and SAP GUI upper-cases the
+                name. The recorder writes UTF-16.
+
+        Returns:
+            The full path SAP GUI resolved the recording to.
+
+        Raises:
+            ValueError: If ``filename`` is not a name SAP GUI accepts.
+            pywintypes.com_error: If SAP GUI refuses to record. Verified live:
+                an invalid file name ("The method got an invalid argument").
+                NOT verified: the recording-disabled case
+                (``sapgui/user_scripting_disable_recording`` = TRUE) was not
+                provoked, because it needs an RZ11 change on a shared system;
+                whether it fails here or silently records nothing is unknown.
+                The COM error text is the only diagnostic.
+
+        Recording-mode behaviour differences (documented in the API guide):
+        the F4 help dialog is always shown as a modal window, and drag &
+        drop is disabled. A journey captured this way is
+        *recorded-behaviour* - label it as such when replaying.
+
+        Do not call this while a recording is already running; the behaviour of
+        changing ``RecordFile`` mid-recording is unverified.
+
+        Stop with :meth:`stop_recording`.
+        """
+        validate_recording_filename(filename)
+        self._com.RecordFile = filename
+        resolved = str(self._com.RecordFile)
+        self._com.Record = True
+        return resolved
+
+    def stop_recording(self) -> None:
+        """Stop script recording started by :meth:`start_recording`."""
+        self._com.Record = False
+
+    @property
+    def is_recording(self) -> bool:
+        """Whether script recording is currently active on this session."""
+        return bool(self._com.Record)
 
     def lock_session_ui(self) -> None:
         """Lock the session UI to prevent user interaction during scripting."""

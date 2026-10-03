@@ -189,6 +189,21 @@ each individual ALV scroll.
 A prebuilt Windows `.exe` is attached to each [release](https://github.com/Hochfrequenz/sapsucker/releases)
 for machines without a Python toolchain.
 
+To start SAP GUI's recorder from the same process, pass `--record`:
+
+```bash
+sapsucker-monitor -o timing.jsonl --record journey3.vbs
+```
+
+The name must be letters and digits with at most one dot (SAP GUI rejects `_`, `-`
+and spaces); the `.vbs` lands in the SAP GUI Scripts folder, upper-cased, and the
+full path is printed. The recorder and the sampler start one after the other, so the
+first JSONL line is a `"record_type": "header"` record holding the sampler origin
+(`origin_at`), the `recording_file` and the measured `recorder_skew` in seconds;
+`elapsed` in every sample is measured from that origin. In record mode SAP GUI always
+shows the F4 help as a modal and disables drag & drop. Library equivalent:
+`session.start_recording("journey3.vbs")` / `session.stop_recording()`.
+
 As a library:
 
 ```python

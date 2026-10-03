@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+import time
 from datetime import timedelta
 from itertools import islice
 from typing import Any
@@ -324,7 +325,7 @@ class TestSchemaVersion:
         session = FakeSession([{"focus": "a"}])
         record = _take(SessionMonitor(session, interval=0), 1)[0].as_record()
         assert record["schema_version"] == SCHEMA_VERSION
-        assert SCHEMA_VERSION == 2  # v2: status-bar fields added (#124); pin so bumps are deliberate
+        assert SCHEMA_VERSION == 3  # v3: --record header line (#125); pin so bumps are deliberate
 
 
 class TestStatusbarSampling:
@@ -386,3 +387,17 @@ class TestStatusbarSampling:
         sample = _take(SessionMonitor(session, interval=0, sample_statusbar=False), 1)[0]
         assert "sbar_type" not in sample.values
         assert "sbar_text" not in sample.values
+
+
+class TestSharedOrigin:
+    """#125: elapsed is measured from a caller-supplied monotonic origin."""
+
+    def test_elapsed_is_measured_from_the_given_origin(self):
+        origin = time.monotonic() - 100.0
+        monitor = SessionMonitor(FakeSession([{"focus": "a"}]), interval=0)
+        sample = next(monitor.samples(origin=origin))
+        assert sample.elapsed >= timedelta(seconds=100)
+
+    def test_origin_defaults_to_sampling_start(self):
+        monitor = SessionMonitor(FakeSession([{"focus": "a"}]), interval=0)
+        assert next(monitor.samples()).elapsed < timedelta(seconds=5)

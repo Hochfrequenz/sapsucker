@@ -82,7 +82,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = ["ABSENT", "SCHEMA_VERSION", "UNREADABLE", "Sample", "SessionMonitor", "Watch"]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """Version of the emitted sample format.
 
 The JSONL becomes a contract the moment anything parses it — field names,
@@ -90,6 +90,9 @@ sentinel spellings, the ISO-8601 duration encoding. Stamping every record means
 a consumer can detect an old file; adding this after the first consumer has
 locked onto field names would be a breaking change with no way to tell which
 format a given file is in. Bump on any change to the record shape.
+
+v3 (#125): a ``--record`` log opens with a ``record_type: header`` line; consumers
+must skip lines that carry ``record_type``.
 """
 
 _T = TypeVar("_T")
@@ -282,8 +285,14 @@ class SessionMonitor:
             "sbar_text": str(raw.Text),
         }
 
-    def samples(self) -> Iterator[Sample]:
+    def samples(self, origin: float | None = None) -> Iterator[Sample]:
         """Yield samples forever, one every ``interval`` seconds.
+
+        Args:
+            origin: A ``time.monotonic()`` reading that ``elapsed`` is measured
+                from. Defaults to the moment sampling starts. Pass a reading
+                taken *before* starting a recorder so both share one origin
+                (``sapsucker-monitor --record``).
 
         The caller owns the loop: break out of it, or wrap it in a timeout. The
         generator sleeps between samples, so it also owns the thread.
@@ -293,7 +302,7 @@ class SessionMonitor:
             what makes the log analysable after the fact; a change-detector was
             the bug in the first version of this.
         """
-        started = time.monotonic()
+        started = time.monotonic() if origin is None else origin
         previous: dict[str, Any] | None = None
         last_change_at = started
 
