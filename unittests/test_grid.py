@@ -69,3 +69,48 @@ class TestGuiGridViewPress:
         assert hasattr(grid, "press_f4"), "GuiGridView.press_f4 is missing"
         grid.press_f4()
         grid._com.PressF4.assert_called_once()
+
+
+class TestGuiGridViewToDicts:
+    """Issue #91: to_dicts pages through the loaded window instead of reading a prefix."""
+
+    def _make_paged_grid(self, total: int, page_size: int):
+        """COM stub where only rows inside [FirstVisibleRow, +page_size) have values."""
+        com = MagicMock()
+        com.TypeAsNumber = 122
+        com.SubType = "GridView"
+        com.RowCount = total
+        com.ColumnOrder = MagicMock()
+        com.ColumnOrder.Count = 2
+        com.ColumnOrder.side_effect = lambda i: ["MANDT", "MWAER"][i]
+        com.FirstVisibleRow = 0
+
+        def get_cell_value(row, col):
+            first = com.FirstVisibleRow
+            if first <= row < first + page_size:
+                return f"v{row}"
+            return ""  # outside the loaded window: blank
+
+        com.GetCellValue.side_effect = get_cell_value
+        return GuiGridView(com), com
+
+    def test_reads_all_rows_paging(self):
+        grid, com = self._make_paged_grid(total=250, page_size=100)
+        rows = grid.to_dicts()
+        assert len(rows) == 250
+        # Every row must have a value — a blank row means we read outside the window.
+        assert all(r["MANDT"] == f"v{i}" for i, r in enumerate(rows)), "row read outside the loaded window"
+        # FirstVisibleRow was advanced and reset.
+        assert com.FirstVisibleRow == 0
+
+    def test_partial_final_page(self):
+        grid, _com = self._make_paged_grid(total=101, page_size=100)
+        rows = grid.to_dicts()
+        assert len(rows) == 101
+        assert rows[100]["MWAER"] == "v100"
+
+    def test_on_page_callback(self):
+        grid, _com = self._make_paged_grid(total=205, page_size=100)
+        pages: list[tuple[int, int]] = []
+        grid.to_dicts(on_page=lambda a, b: pages.append((a, b)))
+        assert pages == [(0, 100), (100, 200), (200, 205)]
