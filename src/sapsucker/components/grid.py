@@ -102,6 +102,8 @@ class GuiGridView(GuiShell):
                 SE16N-sized ALVs.
             on_page: Optional progress callback ``(first_row, next_first)``.
         """
+        if page_size < 1:
+            raise ValueError(f"page_size must be >= 1, got {page_size}")
         if columns is None:
             columns = self.column_order
         total = self.row_count

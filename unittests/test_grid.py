@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from sapsucker.components.grid import GuiGridView
 
 
@@ -114,3 +116,11 @@ class TestGuiGridViewToDicts:
         pages: list[tuple[int, int]] = []
         grid.to_dicts(on_page=lambda a, b: pages.append((a, b)))
         assert pages == [(0, 100), (100, 200), (200, 205)]
+
+    def test_non_positive_page_size_rejected(self):
+        """Copilot review of #120: page_size <= 0 would never advance the window."""
+        grid, _com = self._make_paged_grid(total=10, page_size=5)
+        with pytest.raises(ValueError, match="page_size"):
+            grid.to_dicts(page_size=0)
+        with pytest.raises(ValueError, match="page_size"):
+            grid.to_dicts(page_size=-5)
