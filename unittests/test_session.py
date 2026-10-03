@@ -224,9 +224,11 @@ class TestGuiSessionRecording:
     def test_rejects_names_sap_gui_rejects_before_touching_com(self, name):
         com = make_mock_com()
         com.Record = False
+        com.RecordFile = "untouched"
         with pytest.raises(ValueError, match="invalid recording filename"):
             GuiSession(com).start_recording(name)
         assert com.Record is False
+        assert com.RecordFile == "untouched"
 
     def test_stop_recording_clears_record(self):
         com = make_mock_com()

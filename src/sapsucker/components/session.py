@@ -203,9 +203,13 @@ class GuiSession(GuiContainer):
 
         Raises:
             ValueError: If ``filename`` is not a name SAP GUI accepts.
-            pywintypes.com_error: If SAP GUI refuses to record, e.g. because
-                recording is disabled (``sapgui/user_scripting_disable_recording``
-                = TRUE). The COM error text is the only diagnostic.
+            pywintypes.com_error: If SAP GUI refuses to record. Verified live:
+                an invalid file name ("The method got an invalid argument").
+                NOT verified: the recording-disabled case
+                (``sapgui/user_scripting_disable_recording`` = TRUE) was not
+                provoked, because it needs an RZ11 change on a shared system;
+                whether it fails here or silently records nothing is unknown.
+                The COM error text is the only diagnostic.
 
         Recording-mode behaviour differences (documented in the API guide):
         the F4 help dialog is always shown as a modal window, and drag &
