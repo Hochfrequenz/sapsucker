@@ -1,5 +1,6 @@
-﻿import json
+import json
 from collections import Counter
+
 d = json.load(open("typelib.json"))
 t = d["types"]
 w = {k: v for k, v in t.items() if v.get("members")}
