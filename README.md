@@ -117,11 +117,11 @@ session = app.connections[0].sessions[0]
 # Find the grid on the current screen
 grid = session.find_by_id("wnd[0]/shellcont/shell")
 
-# Read all rows
-for row in range(grid.row_count):
-    for col in grid.column_order:
-        print(grid.get_cell_value(row, col), end="\t")
-    print()
+# Read ALL rows - to_dicts pages through the grid's loaded window.
+# (A naive `for row in range(grid.row_count)` reads only the rows SAP GUI has
+# transferred to the frontend and silently returns blank beyond them.)
+for row_dict in grid.to_dicts():
+    print("\t".join(row_dict.values()))
 ```
 
 ### Navigate a tree control
