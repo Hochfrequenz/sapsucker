@@ -82,7 +82,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = ["ABSENT", "SCHEMA_VERSION", "UNREADABLE", "Sample", "SessionMonitor", "Watch"]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """Version of the emitted sample format.
 
 The JSONL becomes a contract the moment anything parses it — field names,
@@ -90,6 +90,9 @@ sentinel spellings, the ISO-8601 duration encoding. Stamping every record means
 a consumer can detect an old file; adding this after the first consumer has
 locked onto field names would be a breaking change with no way to tell which
 format a given file is in. Bump on any change to the record shape.
+
+v3 (#125): a ``--record`` log opens with a ``record_type: header`` line; consumers
+must skip lines that carry ``record_type``.
 """
 
 _T = TypeVar("_T")

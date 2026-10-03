@@ -325,7 +325,7 @@ class TestSchemaVersion:
         session = FakeSession([{"focus": "a"}])
         record = _take(SessionMonitor(session, interval=0), 1)[0].as_record()
         assert record["schema_version"] == SCHEMA_VERSION
-        assert SCHEMA_VERSION == 2  # v2: status-bar fields added (#124); pin so bumps are deliberate
+        assert SCHEMA_VERSION == 3  # v3: --record header line (#125); pin so bumps are deliberate
 
 
 class TestStatusbarSampling:

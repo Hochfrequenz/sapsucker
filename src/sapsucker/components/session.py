@@ -8,11 +8,20 @@ from typing import Any
 from sapsucker._wrap import wrap_com_object
 from sapsucker.components.base import GuiComponent, GuiContainer
 
-__all__ = ["GuiSession", "GuiSessionInfo"]
+__all__ = ["GuiSession", "GuiSessionInfo", "validate_recording_filename"]
 
 # Verified live against SAP GUI: letters/digits and at most one dot; "_", "-", " " and a
 # second dot are rejected by RecordFile with "The method got an invalid argument".
 _RECORD_FILENAME = re.compile(r"[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?")
+
+
+def validate_recording_filename(filename: str) -> None:
+    """Raise ``ValueError`` unless SAP GUI's ``RecordFile`` accepts ``filename``."""
+    if not _RECORD_FILENAME.fullmatch(filename):
+        raise ValueError(
+            f"invalid recording filename {filename!r}: SAP GUI accepts only ASCII letters and digits "
+            "with at most one dot (no path, underscore, hyphen or space), e.g. 'journey3.vbs'"
+        )
 
 
 class GuiSessionInfo:
@@ -203,13 +212,12 @@ class GuiSession(GuiContainer):
         drop is disabled. A journey captured this way is
         *recorded-behaviour* - label it as such when replaying.
 
+        Do not call this while a recording is already running; the behaviour of
+        changing ``RecordFile`` mid-recording is unverified.
+
         Stop with :meth:`stop_recording`.
         """
-        if not _RECORD_FILENAME.fullmatch(filename):
-            raise ValueError(
-                f"invalid recording filename {filename!r}: SAP GUI accepts only ASCII letters and digits "
-                "with at most one dot (no path, underscore, hyphen or space), e.g. 'journey3.vbs'"
-            )
+        validate_recording_filename(filename)
         self._com.RecordFile = filename
         resolved = str(self._com.RecordFile)
         self._com.Record = True
