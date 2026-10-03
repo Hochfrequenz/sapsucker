@@ -147,3 +147,12 @@ src/_sapsucker_version.py
 # The committed test fixtures live in unittests/fixtures/.
 scripts/probe_output_*.json
 scripts/benchmark_output*.txt
+
+# Scratch/dump files — never check in (includes binaries and one-off dumps;
+# same gate as sensitive-data: stop before commit, not after)
+*.jsonl
+coverage.txt
+typelib.json
+exe/
+*.exe
+
