@@ -37,7 +37,9 @@ uses for COM work, and never from inside a shared COM worker.
 Known limits, by design rather than oversight:
 
 * **Sampling loses fast repeats.** At 200 ms, a journey with six
-  ``firstVisibleRow`` assignments produced four samples showing a change.
+  ``firstVisibleRow`` assignments produced four samples showing a change —
+  re-verified against the surviving pair (``docs/spike/journey5_bp.vbs`` and
+  its ``journey5_timing.jsonl``): 6 assignments, 4 scroll-change samples.
   Positions are recoverable from the full series; event *counts* are not.
 * **Not every recorded line moves observable state.** ``resizeWorkingPane``
   (recorder boilerplate) and a trailing ``setFocus``/``caretPosition`` on a
