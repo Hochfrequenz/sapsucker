@@ -61,7 +61,7 @@ class FakeSession:
         if element_id == "wnd[0]":
             return self._window(state)
         if element_id == "wnd[0]/sbar":
-            return self._sbar(state)
+            return self._sbar(state, raise_error)
         if element_id in state.get("elements", {}):
             element = MagicMock()
             value = state["elements"][element_id]
@@ -85,9 +85,11 @@ class FakeSession:
         return window
 
     @staticmethod
-    def _sbar(state: dict[str, Any]) -> Any:
+    def _sbar(state: dict[str, Any], raise_error: bool) -> Any:
         sbar_state = state.get("sbar")
         if sbar_state is None:
+            if raise_error:
+                raise Exception("Element not found: wnd[0]/sbar")
             return None
         if sbar_state == "raise":
             return _Raises("MessageType")
@@ -322,6 +324,7 @@ class TestSchemaVersion:
         session = FakeSession([{"focus": "a"}])
         record = _take(SessionMonitor(session, interval=0), 1)[0].as_record()
         assert record["schema_version"] == SCHEMA_VERSION
+        assert SCHEMA_VERSION == 2  # v2: status-bar fields added (#124); pin so bumps are deliberate
 
 
 class TestStatusbarSampling:
@@ -356,6 +359,9 @@ class TestStatusbarSampling:
         session = FakeSession([{"focus": "a"}, {"focus": "a"}])
         sample = _take(SessionMonitor(session, interval=0), 1)[0]
         assert sample.values["sbar_type"] == ABSENT
+        assert sample.values["sbar_id"] == ABSENT
+        assert sample.values["sbar_number"] == ABSENT
+        assert sample.values["sbar_text"] == ABSENT
 
     def test_sbar_read_failure_carries_forward(self):
         session = FakeSession(

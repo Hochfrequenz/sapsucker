@@ -82,7 +82,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = ["ABSENT", "SCHEMA_VERSION", "UNREADABLE", "Sample", "SessionMonitor", "Watch"]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 """Version of the emitted sample format.
 
 The JSONL becomes a contract the moment anything parses it — field names,
