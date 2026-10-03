@@ -1,0 +1,22 @@
+altgraph==0.17.5
+annotated-doc==0.0.5
+annotated-types==0.7.0
+colorama==0.4.6
+markdown-it-py==4.2.0
+mdurl==0.1.2
+packaging==26.2
+pefile==2023.2.7
+pydantic==2.13.4
+pydantic-core==2.46.4
+pygments==2.20.0
+pyinstaller==6.16.0
+pyinstaller-hooks-contrib==2026.7
+pywin32==312
+pywin32-ctypes==0.2.3
+rich==15.0.0
+-e file:///D:/a/sapsucker/sapsucker
+setuptools==84.0.0
+shellingham==1.5.4
+typer==0.27.1
+typing-extensions==4.16.0
+typing-inspection==0.4.2

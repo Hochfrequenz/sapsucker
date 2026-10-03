@@ -82,7 +82,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = ["ABSENT", "SCHEMA_VERSION", "UNREADABLE", "Sample", "SessionMonitor", "Watch"]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 """Version of the emitted sample format.
 
 The JSONL becomes a contract the moment anything parses it — field names,
@@ -215,11 +215,16 @@ class SessionMonitor:
             for instance — is reported as :data:`ABSENT` while it is gone.
         interval: Seconds between samples. Lower catches more fast repeats at
             the cost of more COM traffic.
+        sample_statusbar: Sample the status bar (message type/id/number/text)
+            in addition to the fixed fields — the outcome signal a recording
+            carries none of (#124). One extra ``find_by_id`` plus property
+            gets per sample; pass ``False`` to skip it.
     """
 
     session: Any
     watches: Sequence[Watch] = field(default_factory=tuple)
     interval: float = 0.2
+    sample_statusbar: bool = True
 
     def __post_init__(self) -> None:
         if self.interval < 0:
@@ -245,9 +250,37 @@ class SessionMonitor:
             "busy": _safe(lambda: self.session.busy),
             "focus_id": _safe(self._read_focus_id),
         }
+        if self.sample_statusbar:
+            sbar_values = _safe(self._read_statusbar)
+            if isinstance(sbar_values, dict):
+                values.update(sbar_values)
+            else:
+                # The whole sbar read raised (e.g. mid-transition): degrade all
+                # four fields, same pattern as an unreadable Info above.
+                values.update(dict.fromkeys(("sbar_type", "sbar_id", "sbar_number", "sbar_text"), UNREADABLE))
         for watch in self.watches:
             values[watch.key] = _safe(partial(self._read_watch, watch))
         return values
+
+    def _read_statusbar(self) -> dict[str, Any]:
+        """Read the status bar message (#124): the outcome signal of the step.
+
+        The sbar wrapper exists since #116 (message type/id/number with their
+        documented padding quirks); read the raw COM properties here — this
+        runs every sample and must not pay the wrapper-factory cost. The
+        number arrives zero-padded (e.g. ``"042"``); it is kept verbatim
+        because the padding is part of the message identity in T100.
+        """
+        sbar = self.session.find_by_id("wnd[0]/sbar", raise_error=False)
+        if sbar is None:
+            return {"sbar_type": ABSENT, "sbar_id": ABSENT, "sbar_number": ABSENT, "sbar_text": ABSENT}
+        raw = sbar.com if hasattr(sbar, "com") else sbar
+        return {
+            "sbar_type": str(raw.MessageType),
+            "sbar_id": str(raw.MessageId).rstrip(" "),
+            "sbar_number": str(raw.MessageNumber),
+            "sbar_text": str(raw.Text),
+        }
 
     def samples(self) -> Iterator[Sample]:
         """Yield samples forever, one every ``interval`` seconds.
