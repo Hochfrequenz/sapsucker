@@ -103,6 +103,13 @@ def main(
             help="Also sample a COM property, e.g. 'wnd[0]/shellcont/shell:FirstVisibleRow'. Repeatable.",
         ),
     ] = None,
+    no_statusbar: Annotated[
+        bool,
+        typer.Option(
+            "--no-statusbar",
+            help="Skip status-bar sampling (sbar_type/id/number/text) — for the cost-sensitive case.",
+        ),
+    ] = False,
 ) -> None:
     """Sample the live session until interrupted, writing one JSON object per sample."""
     if selftest:
@@ -120,7 +127,7 @@ def main(
     except Exception as exc:  # pylint: disable=broad-exception-caught
         typer.secho(f"attached, but session metadata is unreadable: {exc}", fg=typer.colors.YELLOW, err=True)
 
-    monitor = SessionMonitor(session, watches=watches, interval=interval)
+    monitor = SessionMonitor(session, watches=watches, interval=interval, sample_statusbar=not no_statusbar)
 
     # 9: probe each watch once so a misspelled property is reported now rather
     # than reading <unreadable> for the whole journey.

@@ -59,15 +59,9 @@ class FakeSession:
     def find_by_id(self, element_id: str, raise_error: bool = True) -> Any:
         state = self._state()
         if element_id == "wnd[0]":
-            window = MagicMock()
-            focus = state.get("focus")
-            if focus is None:
-                return None
-            if focus == "raise":
-                window.com.GuiFocus = _Raises("Id")
-                return window
-            window.com.GuiFocus.Id = focus
-            return window
+            return self._window(state)
+        if element_id == "wnd[0]/sbar":
+            return self._sbar(state)
         if element_id in state.get("elements", {}):
             element = MagicMock()
             value = state["elements"][element_id]
@@ -77,6 +71,32 @@ class FakeSession:
             element.com.FirstVisibleRow = value
             return element
         return None
+
+    @staticmethod
+    def _window(state: dict[str, Any]) -> Any:
+        window = MagicMock()
+        focus = state.get("focus")
+        if focus is None:
+            return None
+        if focus == "raise":
+            window.com.GuiFocus = _Raises("Id")
+            return window
+        window.com.GuiFocus.Id = focus
+        return window
+
+    @staticmethod
+    def _sbar(state: dict[str, Any]) -> Any:
+        sbar_state = state.get("sbar")
+        if sbar_state is None:
+            return None
+        if sbar_state == "raise":
+            return _Raises("MessageType")
+        sbar = MagicMock()
+        sbar.com.MessageType = sbar_state.get("type", "S")
+        sbar.com.MessageId = sbar_state.get("id", "")
+        sbar.com.MessageNumber = sbar_state.get("number", "000")
+        sbar.com.Text = sbar_state.get("text", "")
+        return sbar
 
 
 def _take(monitor: SessionMonitor, n: int) -> list[Sample]:
@@ -302,3 +322,61 @@ class TestSchemaVersion:
         session = FakeSession([{"focus": "a"}])
         record = _take(SessionMonitor(session, interval=0), 1)[0].as_record()
         assert record["schema_version"] == SCHEMA_VERSION
+
+
+class TestStatusbarSampling:
+    """Issue #124: the status bar is the outcome signal a recording carries none of."""
+
+    def test_sbar_fields_sampled_by_default(self):
+        session = FakeSession(
+            [
+                {"focus": "a", "sbar": {"type": "S", "id": "DS", "number": "042", "text": "angelegt"}},
+                {"focus": "a", "sbar": {"type": "S", "id": "DS", "number": "042", "text": "angelegt"}},
+            ]
+        )
+        sample = _take(SessionMonitor(session, interval=0), 1)[0]
+        assert sample.values["sbar_type"] == "S"
+        assert sample.values["sbar_id"] == "DS"
+        assert sample.values["sbar_number"] == "042"
+        assert sample.values["sbar_text"] == "angelegt"
+
+    def test_sbar_change_is_reported(self):
+        session = FakeSession(
+            [
+                {"focus": "a", "sbar": {"type": "S", "text": "angelegt"}},
+                {"focus": "a", "sbar": {"type": "E", "text": "Mussfeld ist nicht gefüllt"}},
+            ]
+        )
+        samples = _take(SessionMonitor(session, interval=0), 2)
+        assert "sbar_type" in samples[1].changed
+        assert "sbar_text" in samples[1].changed
+        assert samples[1].values["sbar_text"] == "Mussfeld ist nicht gefüllt"
+
+    def test_sbar_absent_when_no_bar(self):
+        session = FakeSession([{"focus": "a"}, {"focus": "a"}])
+        sample = _take(SessionMonitor(session, interval=0), 1)[0]
+        assert sample.values["sbar_type"] == ABSENT
+
+    def test_sbar_read_failure_carries_forward(self):
+        session = FakeSession(
+            [
+                {"focus": "a", "sbar": {"type": "S", "id": "DS", "number": "042", "text": "angelegt"}},
+                {"focus": "a", "sbar": "raise"},
+            ]
+        )
+        samples = _take(SessionMonitor(session, interval=0), 2)
+        # The failed read must NOT surface as a change (carry-forward).
+        assert "sbar_type" not in samples[1].changed
+        assert samples[1].values["sbar_type"] == "S"
+        assert samples[1].values["sbar_text"] == "angelegt"
+
+    def test_no_statusbar_flag_skips_fields(self):
+        session = FakeSession(
+            [
+                {"focus": "a", "sbar": {"type": "S", "text": "angelegt"}},
+                {"focus": "a", "sbar": {"type": "S", "text": "angelegt"}},
+            ]
+        )
+        sample = _take(SessionMonitor(session, interval=0, sample_statusbar=False), 1)[0]
+        assert "sbar_type" not in sample.values
+        assert "sbar_text" not in sample.values
