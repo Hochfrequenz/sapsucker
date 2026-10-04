@@ -255,6 +255,120 @@ def _is_repeat_anchor(steps_out: list[TimelineStep], idx: int, segment: str) -> 
     )
 
 
+@dataclass
+class _ModalBracket:
+    """One open→close presence interval of a modal's ``wnd[N]:Text`` watch key."""
+
+    key: str
+    open_idx: int
+    close_idx: int
+    used_by: list[int] = field(default_factory=list)
+
+
+def _modal_brackets(log: MonitorLog) -> list[_ModalBracket]:
+    """Precompute every modal presence interval in the log.
+
+    ``wnd[N]:Text`` (N ≥ 1) is present (a non-sentinel string) exactly while
+    the modal N is open. A same-titled chained dialog is indistinguishable
+    (the monitor's known limit) — brackets therefore span the whole
+    present→absent interval, and sibling presses inside one modal share it.
+    """
+    text_keys = sorted(k for k in log.samples[0].values if re.fullmatch(r"wnd\[\d+\]:Text", k))
+    brackets: list[_ModalBracket] = []
+    for key in text_keys:
+        n = int(re.match(r"wnd\[(\d+)\]", key).group(1))
+        if n == 0:
+            continue  # the main window's title is the fingerprint signal, not a modal
+        open_idx: int | None = None
+        for i, sample in enumerate(log.samples):
+            present = isinstance(sample.values.get(key), str) and sample.values[key] not in _SENTINELS
+            if present and open_idx is None:
+                open_idx = i
+            elif not present and open_idx is not None:
+                brackets.append(_ModalBracket(key, open_idx, i))
+                open_idx = None
+        if open_idx is not None:
+            brackets.append(_ModalBracket(key, open_idx, len(log.samples) - 1))
+    return brackets
+
+
+def _modal_bracket_for(
+    log: MonitorLog, cursor: int, element_id: str, used: dict[str, _ModalBracket]
+) -> _ModalBracket | None:
+    """The first unconsumed bracket of the step's modal window, open >= cursor.
+
+    ``used`` maps ``wnd[N]`` to the bracket already taken for it: sibling steps
+    inside one modal share the bracket (they cannot re-match a later modal),
+    while a fresh ``wnd[N]`` after it closed takes the next bracket.
+    """
+    m = re.match(r"^wnd\[(\d+)\]", element_id)
+    if not m or m.group(1) == "0":
+        return None
+    prefix = f"wnd[{m.group(1)}]"
+    cached = used.get(prefix)
+    if cached is not None and cached.open_idx >= cursor:
+        return cached
+    for bracket in _modal_brackets(log):
+        if bracket.key != f"{prefix}:Text" or bracket.open_idx < cursor:
+            continue
+        if any(b.key == bracket.key and b.open_idx == bracket.open_idx for b in used.values()):
+            continue  # this exact bracket was consumed by an earlier modal
+        used[prefix] = bracket
+        return bracket
+    return None
+
+
+def _screen_transition(log: MonitorLog, start: int) -> int | None:
+    """The next sample after *start*-1 whose transaction/program/screen changed."""
+    return _scan(log, start, lambda s: bool(s.changed & {"transaction", "program", "screen_number"}))
+
+
+def _title_transition(log: MonitorLog, start: int) -> int | None:
+    """The next main-window title change without a screen-geometry change —
+    the #82 Finding-4 fingerprint for un-narratable button presses."""
+    return _scan(
+        log,
+        start,
+        lambda s: "wnd[0]:Text" in s.changed and not (s.changed & {"transaction", "program", "screen_number"}),
+    )
+
+
+def _watch_run_anchor(log: MonitorLog, cursor: int, step: RecordingStep) -> int | None:
+    """The next change of the watched property this assignment writes.
+
+    Only fires when the log actually carries the ``<element>:<Prop>`` key —
+    a property nobody watched leaves no trace. The COM name is the Python
+    member's snake_case re-camelized (``first_visible_row`` → ``FirstVisibleRow``).
+    """
+    key = _watch_key_of(step.element_id, step.member)
+    if key is None or not any(key in s.values for s in log.samples):
+        return None
+    return _scan(log, cursor + 1, lambda s: key in s.changed)
+
+
+def _watch_key_of(element_id: str, member: str) -> str | None:
+    parts = member.split("_")
+    camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+    return f"{element_id}:{camel}"
+
+
+def _watch_value_of(sample: MonitorSample, step: RecordingStep) -> str | None:
+    key = _watch_key_of(step.element_id, step.member)
+    value = sample.values.get(key) if key else None
+    return str(value) if value is not None else None
+
+
+def _next_keyboard_step(steps: list[RecordingStep], from_idx: int) -> RecordingStep | None:
+    """The next recorded step, if it is a wnd[0] sendVKey (the Enter that
+    submits what this okcd assignment typed)."""
+    if from_idx + 1 >= len(steps):
+        return None
+    nxt = steps[from_idx + 1]
+    if nxt.member == "sendVKey" and nxt.element_id.startswith("wnd[0]"):
+        return nxt
+    return None
+
+
 def _sbar_at(log: MonitorLog, anchor: int) -> str | None:
     """The status-bar text in force at *anchor*: the last change of any
     ``sbar_text`` key at or before it, skipping sentinel values. None when the
@@ -304,8 +418,10 @@ def correlate(
     steps_out: list[TimelineStep] = []
     cursor = 0
     prev_matched: TimelineStep | None = None
+    used_modals: dict[str, _ModalBracket] = {}
+    t_end_bracket: int | None = None
 
-    for step in recording.steps:
+    for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
         if step.member in _BOILERPLATE_MEMBERS:
             steps_out.append(_emit(step, "recorder-boilerplate", flags=()))
@@ -366,10 +482,86 @@ def correlate(
                 if ambiguous is not None:
                     flags.append("suffix-ambiguous")
 
+        # 3: watch-run — an assignment to an element whose watched property key
+        # exists in the log (ALV scrolling never moves focus).
+        if anchor is None and step.args is not None and len(step.args) == 1:
+            idx = _watch_run_anchor(log, cursor, step)
+            if idx is not None:
+                sample = log.samples[idx]
+                anchor, strategy = idx, "watch-run"
+                if _watch_value_of(sample, step) not in (None, step.args[0]):
+                    flags.append("value-mismatch")
+
+        # 4: keyboard-anchor — an okcd assignment followed by sendVKey: typing
+        # into an already-focused command line produces no focus change, so the
+        # pair binds to the screen transition the sendVKey causes (observed
+        # live: /nse16n from a session parked on the command line). The sendVKey
+        # step itself inherits this anchor: it is the second half of the same
+        # action, and both steps share one transition sample.
+        if (
+            anchor is None
+            and prev_matched is not None
+            and prev_matched.strategy == "fingerprint-screen"
+            and "keyboard-anchor" in prev_matched.flags
+            and step.member == "sendVKey"
+            and step.element_id.startswith("wnd[0]")
+            and prev_matched.element_id.endswith("/tbar[0]/okcd")
+        ):
+            steps_out.append(
+                _emit(
+                    step,
+                    "fingerprint-screen",
+                    t_start=prev_matched.t_start,
+                    flags=("keyboard-anchor", "sub-interval-collapse"),
+                    sbar=prev_matched.sbar_text,
+                )
+            )
+            prev_matched = steps_out[-1]
+            continue
+        if (
+            anchor is None
+            and step.element_id.endswith("/tbar[0]/okcd")
+            and step.args is not None
+            and _next_keyboard_step(recording.steps, i) is not None
+        ):
+            idx = _screen_transition(log, cursor + 1)
+            if idx is not None:
+                anchor, strategy = idx, "fingerprint-screen"
+                flags.append("keyboard-anchor")
+
+        # 5: modal bracketing — wnd[N] (N >= 1) steps take the modal's
+        # open->close window; each bracket is consumable once.
+        t_end: int | None = None
+        if anchor is None:
+            bracket = _modal_bracket_for(log, cursor, step.element_id, used_modals)
+            if bracket is not None:
+                anchor = bracket.open_idx
+                strategy = "modal-bracket"
+                bracket.used_by.append(step.line_no)
+                t_end = bracket.close_idx
+
+        # 6: screen/title fingerprints for press/sendVKey/select on wnd[0].
+        if anchor is None and step.member in _SCREEN_MEMBERS and re.match(r"^wnd\[0\]", step.element_id):
+            idx = _screen_transition(log, cursor + 1)
+            if idx is not None:
+                anchor, strategy = idx, "fingerprint-screen"
+            else:
+                idx = _title_transition(log, cursor + 1)
+                if idx is not None:
+                    anchor, strategy = idx, "fingerprint-title"
+
         if anchor is not None:
             sample = log.samples[anchor]
+            t_end_elapsed = log.samples[t_end].elapsed if t_end is not None else None
             steps_out.append(
-                _emit(step, strategy, t_start=sample.elapsed, flags=tuple(flags), sbar=_sbar_at(log, anchor))
+                _emit(
+                    step,
+                    strategy,
+                    t_start=sample.elapsed,
+                    t_end=t_end_elapsed,
+                    flags=tuple(flags),
+                    sbar=_sbar_at(log, anchor),
+                )
             )
             # Monotonic cursor: a later step may share this anchor (sub-interval
             # actions collapse) but never lands before it. Sharing is what

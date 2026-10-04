@@ -86,17 +86,21 @@ class TestLiveCorrelation:
         tl = correlate(journey, log)
 
         counts = tl.strategy_counts
-        # The three field/navigation steps must all be timestamped.
-        assert counts["unmatched"] <= 2, f"too many unmatched: {counts}"
+        # Every real step must be timestamped (live-verified 2026-10-04: the
+        # okcd pair shares one keyboard-anchor transition; GD-TAB gets
+        # exact-focus; the trailing sendVKey 8 fingerprints the screen change).
+        assert counts.get("unmatched", 0) == 0, f"unmatched steps: {counts}"
         tab = next(s for s in tl.steps if s.member == "text" and s.args == ("T000",))
         assert tab.strategy in ("exact-focus", "ddic-suffix"), tab
         assert tab.t_start is not None
-        okcd = next(s for s in tl.steps if s.element_id.endswith("okcd"))
-        assert okcd.t_start is not None
+        okcd_text = next(s for s in tl.steps if s.element_id.endswith("okcd"))
+        assert okcd_text.strategy == "fingerprint-screen"
+        assert "keyboard-anchor" in okcd_text.flags
+        assert okcd_text.t_start is not None
         # The trailing sendVKey 8 (execute) binds to the screen transition.
         execute = tl.steps[-1]
         assert execute.member == "sendVKey"
-        assert execute.strategy in ("fingerprint-screen", "exact-focus"), execute
+        assert execute.strategy == "fingerprint-screen", execute
         assert execute.t_start is not None
 
         # Clean up: leave the session on a neutral screen.
