@@ -1128,3 +1128,36 @@ class TestMatcherFollowUps:
         tl = correlate(rec, log)
         assert "unmatched" not in [x.strategy for x in tl.steps]
         assert tl.steps[1].t_start == 1.0
+
+    def test_caret_position_after_an_unmatched_step_still_inherits_the_edit(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "z"\n'
+            'session.findById("wnd[0]/usr/txtA").caretPosition = 1\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+        )
+        a = f"{FOCUS}/wnd[0]/usr/txtA"
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": a}),
+            (3.0, ["focus_id"], {"focus_id": a}),
+            (5.0, ["focus_id"], {"focus_id": a}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, None, 1.0, 3.0]
+        assert "sub-interval-collapse" in tl.steps[2].flags
+
+    def test_caret_position_after_an_unmatched_step_inherits_on_the_suffix_path(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "z"\n'
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").caretPosition = 1\n'
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "2"\n'
+        )
+        q = f"{FOCUS}/wnd[0]/usr/ctxtQ-KUNNR"
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": q}),
+            (3.0, ["focus_id"], {"focus_id": q}),
+            (5.0, ["focus_id"], {"focus_id": q}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, None, 1.0, 3.0]

@@ -721,11 +721,14 @@ def correlate(
             steps_out.append(_emit(step, "recorder-boilerplate", flags=()))
             continue
 
+        # setFocus/caretPosition inherit the last step that took an anchor; an
+        # unmatched row in between moved nothing, so it must not block that.
+        collapse_from = _last_matched(steps_out)
         if (
-            prev_matched is not None
+            collapse_from is not None
             and step.member in _COLLAPSE_MEMBERS
-            and step.element_id == prev_matched.element_id
-            and prev_matched.t_start is not None
+            and step.element_id == collapse_from.element_id
+            and collapse_from.t_start is not None
         ):
             steps_out.append(
                 TimelineStep(
@@ -733,13 +736,13 @@ def correlate(
                     step.element_id,
                     step.member,
                     step.args,
-                    prev_matched.strategy,
-                    prev_matched.confidence,
-                    prev_matched.t_start,
-                    prev_matched.t_end,
-                    tuple(dict.fromkeys([*prev_matched.flags, "sub-interval-collapse"])),
-                    prev_matched.sbar_text,
-                    prev_matched.transcript,
+                    collapse_from.strategy,
+                    collapse_from.confidence,
+                    collapse_from.t_start,
+                    collapse_from.t_end,
+                    tuple(dict.fromkeys([*collapse_from.flags, "sub-interval-collapse"])),
+                    collapse_from.sbar_text,
+                    collapse_from.transcript,
                 )
             )
             continue
