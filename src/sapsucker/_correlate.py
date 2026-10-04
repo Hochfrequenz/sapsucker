@@ -398,19 +398,15 @@ class _FocusIndex:
         return len(events) - bisect_right(events, idx)
 
 
-def _next_event(focus: _FocusIndex, seg: str, cursor: int, previous_seg: str | None) -> int | None:
+def _next_event(focus: _FocusIndex, seg: str, cursor: int) -> int | None:
     """The sample the greedy matcher would give a step on *seg* from *cursor*.
 
     Mirrors the matcher: the field's own focus changes first, then (when none is
-    left at or after *cursor*) its DDIC suffix's, which survives layout shifts. A
-    step directly after a step on the same field prefers a strictly later event
-    over sharing *cursor*.
+    left at or after *cursor*) its DDIC suffix's, which survives layout shifts.
     """
     events = focus.by_segment.get(seg, [])
     pos = bisect_left(events, cursor)
     if pos < len(events):
-        if seg == previous_seg and events[pos] == cursor and pos + 1 < len(events):
-            return events[pos + 1]
         return events[pos]
     sfx = _ddic_suffix(seg)
     suffix_events = focus.by_suffix.get(sfx, []) if sfx is not None else []
@@ -425,34 +421,39 @@ def _has_focus_events(focus: _FocusIndex, seg: str) -> bool:
 
 
 def _leaves_more_unmatched(
-    focus: _FocusIndex, idx: int, target: int, segment: str, remaining: Sequence[str], start: int
+    focus: _FocusIndex, idx: int, target: int, segment: str, remaining: Sequence[tuple[str, bool]], start: int
 ) -> bool:
     """Whether taking *target* instead of collapsing onto *idx* starves a later step.
 
-    Replays the remaining event-consuming steps (``remaining[start:]``) greedily
-    from both candidate cursors, in recording order, and counts the steps that
-    find no event. Both replays are identical once their cursors meet, so the
-    walk stops there.
+    Replays ``remaining[start:]`` (``(segment, consumes_an_event)`` per later
+    step) greedily from both candidate cursors, in recording order, and counts
+    the steps that find no event. Both replays are identical once their cursors
+    meet, so the walk stops there.
 
-    The replay only knows focus events. A later step the log holds no focus
-    event for at all (a button press, a watched scroll, a modal) is anchored by
-    other strategies the replay does not model, so it cannot be predicted: the
-    answer is then "yes" and the repeat collapses (flagged) rather than guess.
+    The replay is only exact for plain event-consuming steps on distinct fields.
+    Whenever it meets anything else before the cursors meet it answers "yes",
+    so the repeat collapses (flagged) instead of guessing:
+
+    * a ``setFocus``/``caretPosition`` step (inherits an anchor, or does not);
+    * a later step on a field already seen in the walk, including the repeated
+      field itself (the real matcher's repeat/starvation rules apply to it);
+    * a step the log holds no focus event for (a button press, a watched
+      scroll, a modal), which other strategies anchor.
     """
     cursors = [idx, target]
     unmatched = [0, 0]
-    previous: str | None = segment
+    seen = {segment}
     for k in range(start, len(remaining)):
-        seg = remaining[k]
-        if not _has_focus_events(focus, seg):
+        seg, consumes = remaining[k]
+        if not consumes or seg in seen or not _has_focus_events(focus, seg):
             return True
+        seen.add(seg)
         for which in (0, 1):
-            nxt = _next_event(focus, seg, cursors[which], previous)
+            nxt = _next_event(focus, seg, cursors[which])
             if nxt is None:
                 unmatched[which] += 1
             else:
                 cursors[which] = nxt
-        previous = seg
         if cursors[0] == cursors[1]:
             break
     return unmatched[1] > unmatched[0]
@@ -465,7 +466,7 @@ def _later_unclaimed_focus(
     suffix: str | None,
     later_segments: Counter[str],
     later_suffixes: Counter[str],
-    remaining: Sequence[str],
+    remaining: Sequence[tuple[str, bool]],
     start: int,
 ) -> int | None:
     """A later focus change for a repeated edit, or None to collapse.
@@ -692,12 +693,17 @@ def correlate(
     # is removed from the counters at the top of its iteration.
     later_segments: Counter[str] = Counter()
     later_suffixes: Counter[str] = Counter()
-    consuming: list[str] = []  # segments of the event-consuming steps, in order
-    consumed_so_far = 0
+    # (segment, consumes_an_event) of every non-boilerplate step, in order, and
+    # how many of them the loop has reached (the current one included).
+    walk = [
+        (_last_segment(other.element_id), _consumes_event(other))
+        for other in recording.steps
+        if other.member not in _BOILERPLATE_MEMBERS
+    ]
+    walked = 0
     for other in recording.steps:
         if _consumes_event(other):
             seg = _last_segment(other.element_id)
-            consuming.append(seg)
             later_segments[seg] += 1
             if (sfx := _ddic_suffix(seg)) is not None:
                 later_suffixes[sfx] += 1
@@ -705,8 +711,9 @@ def correlate(
 
     for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
+        if step.member not in _BOILERPLATE_MEMBERS:
+            walked += 1
         if _consumes_event(step):
-            consumed_so_far += 1
             later_segments[segment] -= 1
             if (own_sfx := _ddic_suffix(segment)) is not None:
                 later_suffixes[own_sfx] -= 1
@@ -803,7 +810,7 @@ def correlate(
                 # accepting the shared anchor (two edits of one field bind to two
                 # focus changes when the log has both).
                 later = _later_unclaimed_focus(
-                    focus_index, idx, segment, None, later_segments, later_suffixes, consuming, consumed_so_far
+                    focus_index, idx, segment, None, later_segments, later_suffixes, walk, walked
                 )
                 if later is not None:
                     idx = later
@@ -818,7 +825,7 @@ def correlate(
             idx = _scan(log, cursor, _focus_on_suffix(suffix))
             if idx is not None and _is_repeat_anchor(_last_matched(steps_out), segment, suffix):
                 later = _later_unclaimed_focus(
-                    focus_index, idx, segment, suffix, later_segments, later_suffixes, consuming, consumed_so_far
+                    focus_index, idx, segment, suffix, later_segments, later_suffixes, walk, walked
                 )
                 if later is not None:
                     idx = later

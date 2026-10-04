@@ -1089,3 +1089,42 @@ class TestMatcherFollowUps:
         tl = correlate(rec, log)
         assert [x.t_start for x in tl.steps] == [1.0, 1.0, 1.5, 2.0]
         assert "unmatched" not in [x.strategy for x in tl.steps]
+
+    def test_repeat_collapses_when_a_later_step_is_a_set_focus(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtB").setFocus\n'
+            'session.findById("wnd[0]/usr/txtC").text = "c"\n'
+            'session.findById("wnd[0]/usr/txtB").text = "b"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 2.0, 4.0, 5.0]
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+
+    @pytest.mark.parametrize(
+        "statements",
+        [
+            ["A", "A", "B", "B", "C"],
+            ["A", "A", "A", "B", "C"],
+        ],
+    )
+    def test_repeat_collapses_when_later_steps_repeat_a_field(self, statements):
+        rec = Recording.parse("".join(f'session.findById("wnd[0]/usr/txt{f}").text = "x"\n' for f in statements))
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+        )
+        tl = correlate(rec, log)
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+        assert tl.steps[1].t_start == 1.0
