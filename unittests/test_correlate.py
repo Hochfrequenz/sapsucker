@@ -1161,3 +1161,88 @@ class TestMatcherFollowUps:
         )
         tl = correlate(rec, log)
         assert [x.t_start for x in tl.steps] == [1.0, None, 1.0, 3.0]
+
+
+class TestCliFailureModes:
+    """The CLI maps every input and output failure to a diagnostic and exit code 2 (#131)."""
+
+    def _invoke(self, *args):
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
+        from sapsucker.correlate_cli import app
+
+        return CliRunner().invoke(app, [str(a) for a in args])
+
+    def test_unreadable_recording_exits_2(self, tmp_path, monkeypatch):
+        from sapsucker import correlate_cli
+
+        def boom(path):
+            raise OSError("disk on fire")
+
+        monkeypatch.setattr(correlate_cli.Recording, "load", staticmethod(boom))
+        result = self._invoke(SPIKE / "journey5_bp.vbs", SPIKE / "journey5_timing.jsonl", "--out", tmp_path / "t.jsonl")
+        assert result.exit_code == 2
+        assert "bad recording: disk on fire" in result.output
+
+    def test_unreadable_monitor_log_exits_2(self, tmp_path, monkeypatch):
+        log = tmp_path / "unreadable.jsonl"
+        log.write_text("{}\n", encoding="utf-8")
+        real = Path.read_text
+
+        def read_text(self, *args, **kwargs):
+            if self.name == "unreadable.jsonl":
+                raise OSError("disk on fire")
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", read_text)
+        result = self._invoke(SPIKE / "journey5_bp.vbs", log, "--out", tmp_path / "t.jsonl")
+        assert result.exit_code == 2
+        assert "bad monitor log: disk on fire" in result.output
+
+    def test_unwritable_out_exits_2(self, tmp_path):
+        result = self._invoke(
+            SPIKE / "journey5_bp.vbs", SPIKE / "journey5_timing.jsonl", "--out", tmp_path
+        )  # a directory
+        assert result.exit_code == 2, result.output
+        assert "cannot write --out" in result.output
+
+    def test_unwritable_markdown_exits_2(self, tmp_path):
+        result = self._invoke(
+            SPIKE / "journey5_bp.vbs",
+            SPIKE / "journey5_timing.jsonl",
+            "--out",
+            tmp_path / "t.jsonl",
+            "--markdown",
+            tmp_path,
+        )
+        assert result.exit_code == 2, result.output
+        assert "cannot write --markdown" in result.output
+
+
+class TestFingerprintPrecedence:
+    """The first observable event after a press wins: a screen change or a title change (#131)."""
+
+    REC = 'session.findById("wnd[0]/tbar[0]/btn[11]").press\n'
+
+    def _log(self, *events):
+        # events: (elapsed, kind) with kind "screen" (screen_number changes) or "title" (title only).
+        rows = [(1.0, [], {"wnd[0]:Text": "T0", "screen_number": 100})]
+        screen, title = 100, 0
+        for elapsed, kind in events:
+            if kind == "screen":
+                screen += 100
+                rows.append((elapsed, ["screen_number"], {"wnd[0]:Text": f"T{title}", "screen_number": screen}))
+            else:
+                title += 1
+                rows.append((elapsed, ["wnd[0]:Text"], {"wnd[0]:Text": f"T{title}", "screen_number": screen}))
+        return _log(*rows)
+
+    def test_screen_change_before_title_change_wins(self):
+        tl = correlate(Recording.parse(self.REC), self._log((2.0, "screen"), (3.0, "title")))
+        assert (tl.steps[0].strategy, tl.steps[0].t_start) == ("fingerprint-screen", 2.0)
+
+    def test_title_change_before_screen_change_wins(self):
+        tl = correlate(Recording.parse(self.REC), self._log((2.0, "title"), (3.0, "screen")))
+        assert (tl.steps[0].strategy, tl.steps[0].t_start) == ("fingerprint-title", 2.0)
+
+    # A sample cannot be both: `_title_transition` excludes samples where the screen
+    # changed, so `screen_idx <= title_idx` and `<` are equivalent (the tie is unreachable).
