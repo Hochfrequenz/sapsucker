@@ -343,16 +343,25 @@ def _is_repeat_anchor(prev: TimelineStep | None, segment: str, suffix: str | Non
     return prev_segment == segment or (suffix is not None and _ddic_suffix(prev_segment) == suffix)
 
 
-def _last_matched(steps_out: list[TimelineStep]) -> TimelineStep | None:
-    """The most recent step that actually took an anchor.
+class _LastMatched:
+    """The most recent step that actually took an anchor, tracked incrementally.
 
-    Unmatched and boilerplate rows move nothing, so a repeat edit after one of
-    them still shares the previous matched step's sample.
+    Unmatched and boilerplate rows move nothing, so a repeat edit or a caret
+    step after one of them still refers to the previous matched step. Scanning
+    back from the end on every call is quadratic over a long unmatched run, so
+    the tracker only looks at rows appended since its last call.
     """
-    for step in reversed(steps_out):
-        if step.strategy not in {"unmatched", "recorder-boilerplate"}:
-            return step
-    return None
+
+    def __init__(self) -> None:
+        self._idx = -1
+        self._seen = 0
+
+    def get(self, steps_out: list[TimelineStep]) -> TimelineStep | None:
+        for j in range(self._seen, len(steps_out)):
+            if steps_out[j].strategy not in {"unmatched", "recorder-boilerplate"}:
+                self._idx = j
+        self._seen = len(steps_out)
+        return steps_out[self._idx] if self._idx >= 0 else None
 
 
 def _consumes_event(step: RecordingStep) -> bool:
@@ -708,6 +717,7 @@ def correlate(
             if (sfx := _ddic_suffix(seg)) is not None:
                 later_suffixes[sfx] += 1
     consumed_watch: set[tuple[str, int]] = set()
+    last_matched = _LastMatched()
 
     for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
@@ -723,7 +733,7 @@ def correlate(
 
         # setFocus/caretPosition inherit the last step that took an anchor; an
         # unmatched row in between moved nothing, so it must not block that.
-        collapse_from = _last_matched(steps_out)
+        collapse_from = last_matched.get(steps_out)
         if (
             collapse_from is not None
             and step.member in _COLLAPSE_MEMBERS
@@ -798,7 +808,7 @@ def correlate(
                 anchor, strategy = idx, "watch-run"
                 if _watch_value_of(sample, step) not in (None, step.args[0]):
                     flags.append("value-mismatch")
-                if idx == cursor and _last_matched(steps_out) is not None:
+                if idx == cursor and last_matched.get(steps_out) is not None:
                     # Another step already took this sample (typically a different
                     # watched property that changed in the same sample): one
                     # observed instant, two steps.
@@ -807,7 +817,7 @@ def correlate(
         # 2: exact focus match
         if anchor is None:
             idx = _scan(log, cursor, _focus_on_segment(segment))
-            if idx is not None and _is_repeat_anchor(_last_matched(steps_out), segment):
+            if idx is not None and _is_repeat_anchor(last_matched.get(steps_out), segment):
                 # A consecutive step on the same field matched the same sample the
                 # previous step already took: look for a *later* occurrence before
                 # accepting the shared anchor (two edits of one field bind to two
@@ -826,7 +836,7 @@ def correlate(
         if anchor is None and "-" in segment:
             suffix = _ddic_suffix(segment)
             idx = _scan(log, cursor, _focus_on_suffix(suffix))
-            if idx is not None and _is_repeat_anchor(_last_matched(steps_out), segment, suffix):
+            if idx is not None and _is_repeat_anchor(last_matched.get(steps_out), segment, suffix):
                 later = _later_unclaimed_focus(
                     focus_index, idx, segment, suffix, later_segments, later_suffixes, walk, walked
                 )
