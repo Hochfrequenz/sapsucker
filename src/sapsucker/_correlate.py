@@ -330,23 +330,35 @@ def _focus_on_suffix(suffix: str | None) -> Callable[[MonitorSample], bool]:
     return lambda sample: _focus_changed_to(sample, lambda seg: _ddic_suffix(seg) == suffix)
 
 
-def _is_repeat_anchor(prev: TimelineStep | None, segment: str) -> bool:
+def _is_repeat_anchor(prev: TimelineStep | None, segment: str, suffix: str | None = None) -> bool:
     """True when the previous *matched* step (boilerplate rows excluded) was an
-    exact-focus or ddic-suffix match on the same field — i.e. this step would
-    silently share its anchor."""
-    return (
-        prev is not None
-        and prev.strategy in {"exact-focus", "ddic-suffix"}
-        and prev.t_start is not None
-        and _last_segment(prev.element_id) == segment
-    )
+    exact-focus or ddic-suffix match on the same field (or, for a suffix match,
+    a field with the same DDIC suffix) — i.e. this step would silently share its
+    anchor."""
+    if prev is None or prev.strategy not in {"exact-focus", "ddic-suffix"} or prev.t_start is None:
+        return False
+    prev_segment = _last_segment(prev.element_id)
+    return prev_segment == segment or (suffix is not None and _ddic_suffix(prev_segment) == suffix)
+
+
+def _later_event_segments(recording: Recording, i: int) -> list[str]:
+    """Segments of the steps after *i* that can consume a focus event.
+
+    ``setFocus``/``caretPosition`` inherit the previous step's window and
+    boilerplate moves nothing, so neither competes for an event.
+    """
+    return [
+        _last_segment(later.element_id)
+        for later in recording.steps[i + 1 :]
+        if later.member not in _COLLAPSE_MEMBERS | _BOILERPLATE_MEMBERS
+    ]
 
 
 def _later_unclaimed_focus(
     log: MonitorLog,
     idx: int,
     pred: Callable[[MonitorSample], bool],
-    segment: str,
+    same_field_later: int,
     later_segments: list[str],
 ) -> int | None:
     """A later focus change for a repeated edit of *segment*, or None.
@@ -355,11 +367,14 @@ def _later_unclaimed_focus(
     person clicked another field and came back), but it must not steal what a
     *later recorded step* needs: the target is refused when later steps on the
     same field would be left without an event, or when it lies beyond a focus
-    change onto a field a later step targets.
+    change onto a field a later step targets. The second rule is deliberately
+    conservative: it collapses (flagged ``sub-interval-collapse``) rather than
+    jump when the visited field is also edited later, even if the log would
+    have a separate event for that later edit.
     """
     focus_samples = [j for j in range(idx + 1, len(log.samples)) if "focus_id" in log.samples[j].changed]
     matching = [j for j in focus_samples if pred(log.samples[j])]
-    if len(matching) <= later_segments.count(segment):
+    if len(matching) <= same_field_later:
         return None
     target = matching[0]
     needed = set(later_segments) | {sfx for seg in later_segments if (sfx := _ddic_suffix(seg)) is not None}
@@ -552,7 +567,6 @@ def correlate(
 
     for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
-        later_segments = [_last_segment(later.element_id) for later in recording.steps[i + 1 :]]
         if step.member in _BOILERPLATE_MEMBERS:
             steps_out.append(_emit(step, "recorder-boilerplate", flags=()))
             continue
@@ -632,7 +646,10 @@ def correlate(
                 # previous step already took: look for a *later* occurrence before
                 # accepting the shared anchor (two edits of one field bind to two
                 # focus changes when the log has both).
-                later = _later_unclaimed_focus(log, idx, _focus_on_segment(segment), segment, later_segments)
+                later_segments = _later_event_segments(recording, i)
+                later = _later_unclaimed_focus(
+                    log, idx, _focus_on_segment(segment), later_segments.count(segment), later_segments
+                )
                 if later is not None:
                     idx = later
                 else:
@@ -644,8 +661,10 @@ def correlate(
         if anchor is None and "-" in segment:
             suffix = _ddic_suffix(segment)
             idx = _scan(log, cursor, _focus_on_suffix(suffix))
-            if idx is not None and _is_repeat_anchor(prev_matched, segment):
-                later = _later_unclaimed_focus(log, idx, _focus_on_suffix(suffix), segment, later_segments)
+            if idx is not None and _is_repeat_anchor(prev_matched, segment, suffix):
+                later_segments = _later_event_segments(recording, i)
+                same = sum(1 for seg in later_segments if _ddic_suffix(seg) == suffix)
+                later = _later_unclaimed_focus(log, idx, _focus_on_suffix(suffix), same, later_segments)
                 if later is not None:
                     idx = later
                 else:

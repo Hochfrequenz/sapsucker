@@ -822,6 +822,35 @@ class TestOpusRound:
         tl = correlate(rec, log)
         assert [x.t_start for x in tl.steps] == [1.0, 1.0, 5.0]
 
+    def test_trailing_caret_position_does_not_block_the_repeat(self):
+        # setFocus/caretPosition never consume a focus event, so the recorder's
+        # usual ".text = ..." + ".caretPosition = n" must not starve the repeat.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtA").caretPosition = 1\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 3.0, 3.0]
+
+    def test_suffix_repeat_counts_later_steps_by_suffix(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtS1-TEL").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtS1-TEL").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtS9-TEL").text = "3"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtS2-TEL"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtS2-TEL"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 3.0]
+
     def test_markdown_escapes_backslashes(self):
         rec = Recording.parse('session.findById("wnd[0]/tbar[0]/btn[11]").press\n')
         log = _log(
