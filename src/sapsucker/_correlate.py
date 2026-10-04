@@ -32,8 +32,9 @@ from __future__ import annotations
 
 import json
 import re
+from bisect import bisect_left, bisect_right
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -188,9 +189,10 @@ class TimelineStep:
     #: Clock alignment is run metadata (``CorrelatedTimeline.clock_origin_assumed``),
     #: not a step flag.
     flags: tuple[str, ...] = ()
-    #: Status-bar text in force at the matched sample (the outcome signal a
-    #: recording carries none of); None when unmatched or when the log has no
-    #: status-bar keys.
+    #: Last readable status-bar text at or before the matched sample; None when
+    #: unmatched or when the log has no status-bar keys. A message this step
+    #: causes one sample *after* its anchor shows up on the next step instead,
+    #: so treat it as context, not as this step's outcome (#131).
     sbar_text: str | None = None
     #: Transcript excerpts intersecting the matched window, verbatim.
     transcript: tuple[str, ...] = ()
@@ -331,7 +333,7 @@ def _focus_on_suffix(suffix: str | None) -> Callable[[MonitorSample], bool]:
 
 
 def _is_repeat_anchor(prev: TimelineStep | None, segment: str, suffix: str | None = None) -> bool:
-    """True when the previous *matched* step (boilerplate rows excluded) was an
+    """True when the previous *matched* step (unmatched and boilerplate rows excluded) was an
     exact-focus or ddic-suffix match on the same field (or, for a suffix match,
     a field with the same DDIC suffix) — i.e. this step would silently share its
     anchor."""
@@ -341,51 +343,171 @@ def _is_repeat_anchor(prev: TimelineStep | None, segment: str, suffix: str | Non
     return prev_segment == segment or (suffix is not None and _ddic_suffix(prev_segment) == suffix)
 
 
-def _later_event_segments(recording: Recording, i: int) -> list[str]:
-    """Segments of the steps after *i* that can consume a focus event.
+class _LastMatched:
+    """The most recent step that actually took an anchor, tracked incrementally.
+
+    Unmatched and boilerplate rows move nothing, so a repeat edit or a caret
+    step after one of them still refers to the previous matched step. Scanning
+    back from the end on every call is quadratic over a long unmatched run, so
+    the tracker only looks at rows appended since its last call.
+    """
+
+    def __init__(self) -> None:
+        self._idx = -1
+        self._seen = 0
+
+    def get(self, steps_out: list[TimelineStep]) -> TimelineStep | None:
+        for j in range(self._seen, len(steps_out)):
+            if steps_out[j].strategy not in {"unmatched", "recorder-boilerplate"}:
+                self._idx = j
+        self._seen = len(steps_out)
+        return steps_out[self._idx] if self._idx >= 0 else None
+
+
+def _consumes_event(step: RecordingStep) -> bool:
+    """Whether *step* competes for a focus event.
 
     ``setFocus``/``caretPosition`` inherit the previous step's window and
-    boilerplate moves nothing, so neither competes for an event.
+    boilerplate moves nothing, so neither does.
     """
-    return [
-        _last_segment(later.element_id)
-        for later in recording.steps[i + 1 :]
-        if later.member not in _COLLAPSE_MEMBERS | _BOILERPLATE_MEMBERS
-    ]
+    return step.member not in _COLLAPSE_MEMBERS | _BOILERPLATE_MEMBERS
+
+
+class _FocusIndex:
+    """Readable focus changes of a log, indexed once per :func:`correlate` call.
+
+    ``all_idx`` lists the sample indices where focus moved to a readable id and
+    ``segment_at`` the last path segment of each; ``by_segment`` / ``by_suffix``
+    list, per last path segment / DDIC suffix, the sample indices of those
+    changes, each sorted ascending.
+    """
+
+    def __init__(self, log: MonitorLog) -> None:
+        self.all_idx: list[int] = []
+        self.segment_at: list[str] = []
+        self.by_segment: dict[str, list[int]] = {}
+        self.by_suffix: dict[str, list[int]] = {}
+        for i, sample in enumerate(log.samples):
+            if "focus_id" not in sample.changed:
+                continue
+            focus = sample.values.get("focus_id")
+            if not isinstance(focus, str) or focus in _SENTINELS:
+                continue
+            seg = _last_segment(focus)
+            self.all_idx.append(i)
+            self.segment_at.append(seg)
+            self.by_segment.setdefault(seg, []).append(i)
+            sfx = _ddic_suffix(seg)
+            if sfx is not None:
+                self.by_suffix.setdefault(sfx, []).append(i)
+
+    @staticmethod
+    def after(events: list[int], idx: int) -> int:
+        """How many of the sorted *events* lie after sample *idx*."""
+        return len(events) - bisect_right(events, idx)
+
+
+def _next_event(focus: _FocusIndex, seg: str, cursor: int) -> int | None:
+    """The sample the greedy matcher would give a step on *seg* from *cursor*.
+
+    Mirrors the matcher: the field's own focus changes first, then (when none is
+    left at or after *cursor*) its DDIC suffix's, which survives layout shifts.
+    """
+    events = focus.by_segment.get(seg, [])
+    pos = bisect_left(events, cursor)
+    if pos < len(events):
+        return events[pos]
+    sfx = _ddic_suffix(seg)
+    suffix_events = focus.by_suffix.get(sfx, []) if sfx is not None else []
+    pos = bisect_left(suffix_events, cursor)
+    return suffix_events[pos] if pos < len(suffix_events) else None
+
+
+def _has_focus_events(focus: _FocusIndex, seg: str) -> bool:
+    """Whether the log holds any focus change the replay could give *seg*."""
+    sfx = _ddic_suffix(seg)
+    return bool(focus.by_segment.get(seg)) or (sfx is not None and bool(focus.by_suffix.get(sfx)))
+
+
+def _leaves_more_unmatched(
+    focus: _FocusIndex, idx: int, target: int, segment: str, remaining: Sequence[tuple[str, bool]], start: int
+) -> bool:
+    """Whether taking *target* instead of collapsing onto *idx* starves a later step.
+
+    Replays ``remaining[start:]`` (``(segment, consumes_an_event)`` per later
+    step) greedily from both candidate cursors, in recording order, and counts
+    the steps that find no event. Both replays are identical once their cursors
+    meet, so the walk stops there.
+
+    The replay is only exact for plain event-consuming steps on distinct fields.
+    Whenever it meets anything else before the cursors meet it answers "yes",
+    so the repeat collapses (flagged) instead of guessing:
+
+    * a ``setFocus``/``caretPosition`` step (inherits an anchor, or does not);
+    * a later step on a field already seen in the walk, including the repeated
+      field itself (the real matcher's repeat/starvation rules apply to it);
+    * a step the log holds no focus event for (a button press, a watched
+      scroll, a modal), which other strategies anchor.
+    """
+    cursors = [idx, target]
+    unmatched = [0, 0]
+    seen = {segment}
+    for k in range(start, len(remaining)):
+        seg, consumes = remaining[k]
+        if not consumes or seg in seen or not _has_focus_events(focus, seg):
+            return True
+        seen.add(seg)
+        for which in (0, 1):
+            nxt = _next_event(focus, seg, cursors[which])
+            if nxt is None:
+                unmatched[which] += 1
+            else:
+                cursors[which] = nxt
+        if cursors[0] == cursors[1]:
+            break
+    return unmatched[1] > unmatched[0]
 
 
 def _later_unclaimed_focus(
-    log: MonitorLog,
+    focus: _FocusIndex,
     idx: int,
-    pred: Callable[[MonitorSample], bool],
-    same_field_later: int,
-    later_segments: list[str],
+    segment: str,
+    suffix: str | None,
+    later_segments: Counter[str],
+    later_suffixes: Counter[str],
+    remaining: Sequence[tuple[str, bool]],
+    start: int,
 ) -> int | None:
-    """A later focus change for a repeated edit of *segment*, or None.
+    """A later focus change for a repeated edit, or None to collapse.
 
     A repeat may skip over focus visits the recording never mentions (the
-    person clicked another field and came back), but it must not steal what a
-    *later recorded step* needs: the target is refused when later steps on the
-    same field would be left without an event, or when it lies beyond a focus
-    change onto a field a later step targets. The second rule is deliberately
-    conservative: it collapses (flagged ``sub-interval-collapse``) rather than
-    jump when the visited field is also edited later, even if the log would
-    have a separate event for that later edit.
+    person clicked another field and came back), but it must not starve a
+    *later recorded step*. The target (the next change of this field after
+    *idx*; matched by DDIC *suffix* when one is given) is refused when
+
+    * later steps on the same field would be left without an event (a count), or
+    * a field visited between *idx* and the target is edited by a later step
+      and replaying the later steps from the target leaves more of them
+      unmatched than replaying them from *idx* (order-aware; only run when such
+      a visited field exists, so plain repeats stay cheap).
     """
-    focus_samples = [j for j in range(idx + 1, len(log.samples)) if "focus_id" in log.samples[j].changed]
-    matching = [j for j in focus_samples if pred(log.samples[j])]
-    if len(matching) <= same_field_later:
+    if suffix is not None:
+        events = focus.by_suffix.get(suffix, [])
+        later_same = later_suffixes[suffix]
+    else:
+        events = focus.by_segment.get(segment, [])
+        later_same = later_segments[segment]
+    if focus.after(events, idx) <= later_same:
         return None
-    target = matching[0]
-    needed = set(later_segments) | {sfx for seg in later_segments if (sfx := _ddic_suffix(seg)) is not None}
-    for j in focus_samples:
-        if j >= target:
-            break
-        focus = log.samples[j].values.get("focus_id")
-        if isinstance(focus, str) and focus not in _SENTINELS:
-            seg = _last_segment(focus)
-            if seg in needed or _ddic_suffix(seg) in needed:
+    target = events[bisect_right(events, idx)]
+    lo = bisect_right(focus.all_idx, idx)
+    hi = bisect_left(focus.all_idx, target)
+    for seg in set(focus.segment_at[lo:hi]):
+        sfx = _ddic_suffix(seg)
+        if later_segments[seg] or (sfx is not None and later_suffixes[sfx]):
+            if _leaves_more_unmatched(focus, idx, target, segment, remaining, start):
                 return None
+            break
     return target
 
 
@@ -472,8 +594,15 @@ def _title_transition(log: MonitorLog, start: int) -> int | None:
     )
 
 
-def _watch_run_anchor(log: MonitorLog, cursor: int, step: RecordingStep) -> int | None:
-    """The next change of the watched property this assignment writes.
+def _watch_run_anchor(
+    log: MonitorLog, cursor: int, step: RecordingStep, consumed: set[tuple[str, int]]
+) -> tuple[int, str] | None:
+    """The next unconsumed change of the watched property this assignment writes.
+
+    Returns the sample index and the watch key. A change is consumed once a step
+    took it, so two assignments to the *same* property bind to two changes, while
+    a *different* property that changed in the same sample as the previous
+    anchor is still available (the scan starts at the cursor, not after it).
 
     Only fires when the log actually carries the ``<element>:<Prop>`` key —
     a property nobody watched leaves no trace. The COM name is the Python
@@ -482,7 +611,11 @@ def _watch_run_anchor(log: MonitorLog, cursor: int, step: RecordingStep) -> int 
     key = _watch_key_of(step.element_id, step.member)
     if key is None or not any(key in s.values for s in log.samples):
         return None
-    return _scan(log, cursor + 1, lambda s: key in s.changed)
+    # Sample 0 is the baseline read, never a change.
+    for i in range(max(cursor, 1), len(log.samples)):
+        if key in log.samples[i].changed and (key, i) not in consumed:
+            return i, key
+    return None
 
 
 def _watch_key_of(element_id: str, member: str) -> str | None:
@@ -564,18 +697,48 @@ def correlate(
     prev_matched: TimelineStep | None = None
     used_modals: dict[str, _ModalBracket] = {}
     modal_brackets = _modal_brackets(log)
+    focus_index = _FocusIndex(log)
+    # Events still wanted by the steps *after* the current one; the current step
+    # is removed from the counters at the top of its iteration.
+    later_segments: Counter[str] = Counter()
+    later_suffixes: Counter[str] = Counter()
+    # (segment, consumes_an_event) of every non-boilerplate step, in order, and
+    # how many of them the loop has reached (the current one included).
+    walk = [
+        (_last_segment(other.element_id), _consumes_event(other))
+        for other in recording.steps
+        if other.member not in _BOILERPLATE_MEMBERS
+    ]
+    walked = 0
+    for other in recording.steps:
+        if _consumes_event(other):
+            seg = _last_segment(other.element_id)
+            later_segments[seg] += 1
+            if (sfx := _ddic_suffix(seg)) is not None:
+                later_suffixes[sfx] += 1
+    consumed_watch: set[tuple[str, int]] = set()
+    last_matched = _LastMatched()
 
     for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
+        if step.member not in _BOILERPLATE_MEMBERS:
+            walked += 1
+        if _consumes_event(step):
+            later_segments[segment] -= 1
+            if (own_sfx := _ddic_suffix(segment)) is not None:
+                later_suffixes[own_sfx] -= 1
         if step.member in _BOILERPLATE_MEMBERS:
             steps_out.append(_emit(step, "recorder-boilerplate", flags=()))
             continue
 
+        # setFocus/caretPosition inherit the last step that took an anchor; an
+        # unmatched row in between moved nothing, so it must not block that.
+        collapse_from = last_matched.get(steps_out)
         if (
-            prev_matched is not None
+            collapse_from is not None
             and step.member in _COLLAPSE_MEMBERS
-            and step.element_id == prev_matched.element_id
-            and prev_matched.t_start is not None
+            and step.element_id == collapse_from.element_id
+            and collapse_from.t_start is not None
         ):
             steps_out.append(
                 TimelineStep(
@@ -583,13 +746,13 @@ def correlate(
                     step.element_id,
                     step.member,
                     step.args,
-                    prev_matched.strategy,
-                    prev_matched.confidence,
-                    prev_matched.t_start,
-                    prev_matched.t_end,
-                    tuple(dict.fromkeys([*prev_matched.flags, "sub-interval-collapse"])),
-                    prev_matched.sbar_text,
-                    prev_matched.transcript,
+                    collapse_from.strategy,
+                    collapse_from.confidence,
+                    collapse_from.t_start,
+                    collapse_from.t_end,
+                    tuple(dict.fromkeys([*collapse_from.flags, "sub-interval-collapse"])),
+                    collapse_from.sbar_text,
+                    collapse_from.transcript,
                 )
             )
             continue
@@ -604,7 +767,8 @@ def correlate(
         # more specific signal, and the focus move onto the element predates
         # every assignment after the first (the journey-5 scroll run).
         if step.args is not None and len(step.args) == 1:
-            idx = _watch_run_anchor(log, cursor, step)
+            hit = _watch_run_anchor(log, cursor, step, consumed_watch)
+            idx = hit[0] if hit is not None else None
             if (
                 idx is None
                 and prev_matched is not None
@@ -637,23 +801,29 @@ def correlate(
                 )
                 prev_matched = steps_out[-1]
                 continue
-            if idx is not None:
+            if hit is not None:
+                idx, watch_key = hit
+                consumed_watch.add((watch_key, idx))
                 sample = log.samples[idx]
                 anchor, strategy = idx, "watch-run"
                 if _watch_value_of(sample, step) not in (None, step.args[0]):
                     flags.append("value-mismatch")
+                if idx == cursor and last_matched.get(steps_out) is not None:
+                    # Another step already took this sample (typically a different
+                    # watched property that changed in the same sample): one
+                    # observed instant, two steps.
+                    flags.append("sub-interval-collapse")
 
         # 2: exact focus match
         if anchor is None:
             idx = _scan(log, cursor, _focus_on_segment(segment))
-            if idx is not None and _is_repeat_anchor(prev_matched, segment):
+            if idx is not None and _is_repeat_anchor(last_matched.get(steps_out), segment):
                 # A consecutive step on the same field matched the same sample the
                 # previous step already took: look for a *later* occurrence before
                 # accepting the shared anchor (two edits of one field bind to two
                 # focus changes when the log has both).
-                later_segments = _later_event_segments(recording, i)
                 later = _later_unclaimed_focus(
-                    log, idx, _focus_on_segment(segment), later_segments.count(segment), later_segments
+                    focus_index, idx, segment, None, later_segments, later_suffixes, walk, walked
                 )
                 if later is not None:
                     idx = later
@@ -666,10 +836,10 @@ def correlate(
         if anchor is None and "-" in segment:
             suffix = _ddic_suffix(segment)
             idx = _scan(log, cursor, _focus_on_suffix(suffix))
-            if idx is not None and _is_repeat_anchor(prev_matched, segment, suffix):
-                later_segments = _later_event_segments(recording, i)
-                same = sum(1 for seg in later_segments if _ddic_suffix(seg) == suffix)
-                later = _later_unclaimed_focus(log, idx, _focus_on_suffix(suffix), same, later_segments)
+            if idx is not None and _is_repeat_anchor(last_matched.get(steps_out), segment, suffix):
+                later = _later_unclaimed_focus(
+                    focus_index, idx, segment, suffix, later_segments, later_suffixes, walk, walked
+                )
                 if later is not None:
                     idx = later
                 else:
@@ -829,7 +999,7 @@ def _attach_transcripts(
             excerpts: tuple[str, ...] = ()
         else:
             lo = step.t_start - _TRANSCRIPT_SLACK
-            hi = step.t_end if step.t_end is not None else step.t_start + _TRANSCRIPT_SLACK
+            hi = (step.t_end if step.t_end is not None else step.t_start) + _TRANSCRIPT_SLACK
             excerpts = tuple(
                 entry.text for entry in transcript if entry.t_start + skew <= hi and entry.t_end + skew >= lo
             )

@@ -893,3 +893,271 @@ class TestOpusRound:
 
         with pytest.raises(ValueError, match="SRT"):
             parse_srt(f"1\n{cue}\ntext\n")
+
+
+class TestMatcherFollowUps:
+    """Matcher items from #131."""
+
+    def test_repeat_after_an_unmatched_step_is_not_silently_shared(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "z"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.strategy for x in tl.steps] == ["exact-focus", "unmatched", "exact-focus"]
+        assert tl.steps[2].t_start == 3.0
+
+    def test_repeat_after_an_unmatched_step_with_one_event_is_flagged(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "z"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+        )
+        log = _log((1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}))
+        tl = correlate(rec, log)
+        assert "sub-interval-collapse" in tl.steps[2].flags
+
+    def test_two_watched_properties_changing_in_one_sample_both_match(self):
+        shell = "wnd[0]/shellcont/shell"
+        rec = Recording.parse(
+            f'session.findById("{shell}").firstVisibleRow = 8\nsession.findById("{shell}").currentCellRow = 3\n'
+        )
+        log = _log(
+            (1.0, [], {f"{shell}:FirstVisibleRow": "0", f"{shell}:CurrentCellRow": "0"}),
+            (
+                2.0,
+                [f"{shell}:FirstVisibleRow", f"{shell}:CurrentCellRow"],
+                {f"{shell}:FirstVisibleRow": "8", f"{shell}:CurrentCellRow": "3"},
+            ),
+        )
+        tl = correlate(rec, log)
+        assert [(x.strategy, x.t_start) for x in tl.steps] == [("watch-run", 2.0), ("watch-run", 2.0)]
+        assert "sub-interval-collapse" not in tl.steps[0].flags
+        assert "sub-interval-collapse" in tl.steps[1].flags
+        assert not any("value-mismatch" in x.flags for x in tl.steps)
+
+    def test_visited_field_edited_later_does_not_block_the_repeat_while_events_remain(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtC").text = "c"\n'
+            'session.findById("wnd[0]/usr/txtB").text = "b"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 3.0, 4.0, 5.0]
+        assert not any("sub-interval-collapse" in x.flags for x in tl.steps)
+
+    def test_unrelated_field_with_the_same_suffix_does_not_block_the_repeat(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtP").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtP").text = "2"\n'
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "k"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtP"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtY-KUNNR"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtP"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtX-KUNNR"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 3.0, 4.0]
+
+    def test_transcript_window_is_widened_on_both_sides_of_a_modal_bracket(self):
+        rec = Recording.parse('session.findById("wnd[1]/usr/btnA").press\n')
+        log = _log(
+            (1.0, [], {"wnd[1]:Text": "<absent>"}),
+            (4.0, ["wnd[1]:Text"], {"wnd[1]:Text": "Dialog"}),
+            (5.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>"}),
+        )
+        cues = (
+            TranscriptEntry(0.5, 1.9, "before"),
+            TranscriptEntry(0.5, 2.1, "overlaps lower bound"),
+            TranscriptEntry(6.9, 7.5, "overlaps upper bound"),
+            TranscriptEntry(7.1, 7.5, "after"),
+        )
+        step = correlate(rec, log, transcript=cues).steps[0]
+        assert (step.t_start, step.t_end) == (4.0, 5.0)
+        assert step.transcript == ("overlaps lower bound", "overlaps upper bound")
+
+    def test_repeat_does_not_jump_over_a_visited_field_a_later_step_needs(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtB").text = "b"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 2.0]
+        assert "sub-interval-collapse" in tl.steps[1].flags
+
+    def test_repeat_does_not_starve_a_later_step_whose_only_event_comes_after_anothers(self):
+        # B's only remaining event (B@5) is after C's (C@4): taking A@3 for the
+        # repeat would move the cursor past C and leave it unmatched.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtB").text = "b"\n'
+            'session.findById("wnd[0]/usr/txtC").text = "c"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 2.0, 4.0]
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+
+    def test_suffix_repeat_after_an_unmatched_step_is_recognised(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "z"\n'
+            'session.findById("wnd[0]/usr/ctxtY-KUNNR").text = "2"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtQ-KUNNR"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtQ-KUNNR"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.strategy for x in tl.steps] == ["ddic-suffix", "unmatched", "ddic-suffix"]
+        assert tl.steps[2].t_start == 3.0
+
+    def test_change_listed_in_the_baseline_sample_is_not_a_watch_match(self):
+        shell = "wnd[0]/shellcont/shell"
+        key = f"{shell}:FirstVisibleRow"
+        rec = Recording.parse(f'session.findById("{shell}").firstVisibleRow = 8\n')
+        log = _log((0.0, [key], {key: "8"}), (1.0, [key], {key: "8"}))
+        assert correlate(rec, log).steps[0].t_start == 1.0
+
+    def test_replay_falls_back_to_suffix_events_once_exact_events_are_exhausted(self):
+        # X-KUNNR has an exact event only *before* the cursor; its match comes from
+        # the suffix event at 3.0. Taking P@4.0 for the repeat would strand it.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtP").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtP").text = "2"\n'
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "k"\n'
+            'session.findById("wnd[0]/usr/txtC").text = "c"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtX-KUNNR"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtP"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtY-KUNNR"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtP"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [2.0, 2.0, 3.0, 5.0]
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+
+    def test_repeat_collapses_when_a_later_step_is_anchored_by_something_other_than_focus(self):
+        # The press is timestamped by a screen change the focus replay cannot see;
+        # jumping to A@3.0 would move the cursor past it and strand B.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/tbar[0]/btn[11]").press\n'
+            'session.findById("wnd[0]/usr/txtB").text = "b"\n'
+        )
+        a = f"{FOCUS}/wnd[0]/usr/txtA"
+        b = f"{FOCUS}/wnd[0]/usr/txtB"
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": a, "screen_number": 100}),
+            (1.5, ["screen_number"], {"focus_id": a, "screen_number": 200}),
+            (2.0, ["focus_id"], {"focus_id": b, "screen_number": 200}),
+            (3.0, ["focus_id"], {"focus_id": a, "screen_number": 200}),
+            (4.0, ["focus_id"], {"focus_id": b, "screen_number": 200}),
+            (5.0, ["screen_number"], {"focus_id": b, "screen_number": 300}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 1.5, 2.0]
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+
+    def test_repeat_collapses_when_a_later_step_is_a_set_focus(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtB").setFocus\n'
+            'session.findById("wnd[0]/usr/txtC").text = "c"\n'
+            'session.findById("wnd[0]/usr/txtB").text = "b"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 2.0, 4.0, 5.0]
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+
+    @pytest.mark.parametrize(
+        "statements",
+        [
+            ["A", "A", "B", "B", "C"],
+            ["A", "A", "A", "B", "C"],
+        ],
+    )
+    def test_repeat_collapses_when_later_steps_repeat_a_field(self, statements):
+        rec = Recording.parse("".join(f'session.findById("wnd[0]/usr/txt{f}").text = "x"\n' for f in statements))
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+        )
+        tl = correlate(rec, log)
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+        assert tl.steps[1].t_start == 1.0
+
+    def test_caret_position_after_an_unmatched_step_still_inherits_the_edit(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "z"\n'
+            'session.findById("wnd[0]/usr/txtA").caretPosition = 1\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+        )
+        a = f"{FOCUS}/wnd[0]/usr/txtA"
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": a}),
+            (3.0, ["focus_id"], {"focus_id": a}),
+            (5.0, ["focus_id"], {"focus_id": a}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, None, 1.0, 3.0]
+        assert "sub-interval-collapse" in tl.steps[2].flags
+
+    def test_caret_position_after_an_unmatched_step_inherits_on_the_suffix_path(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "z"\n'
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").caretPosition = 1\n'
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "2"\n'
+        )
+        q = f"{FOCUS}/wnd[0]/usr/ctxtQ-KUNNR"
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": q}),
+            (3.0, ["focus_id"], {"focus_id": q}),
+            (5.0, ["focus_id"], {"focus_id": q}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, None, 1.0, 3.0]
