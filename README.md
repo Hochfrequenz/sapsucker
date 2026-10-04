@@ -236,9 +236,10 @@ Each recorded statement is timestamped by the first strategy that fits, and the 
 is reported per step: `exact-focus`, `ddic-suffix`, `watch-run`, `modal-bracket`,
 `fingerprint-screen`, `fingerprint-title`, `recorder-boilerplate`, or `unmatched`.
 Each step also carries `flags` such as `keyboard-anchor`, `layout-sensitive`,
-`suffix-ambiguous`, `sub-interval-collapse`, `value-mismatch` and `clock-origin-assumed`.
-A log without a `--record` header has no measured clock offset, so alignment is assumed
-and flagged.
+`suffix-ambiguous`, `sub-interval-collapse` and `value-mismatch`. Clock alignment is
+reported per run, not per step: a log without a `--record` header has no measured clock
+offset, so every JSONL record carries `"clock_origin_assumed": true` and
+`"recorder_skew": null`, and the markdown header states the assumption.
 
 The matcher is heuristic. A prototype timestamped most statements of one real
 recording/log pair; that is a single pair, not an accuracy figure, so read the

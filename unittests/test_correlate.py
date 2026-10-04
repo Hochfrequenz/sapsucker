@@ -661,6 +661,8 @@ class TestCopilotRound:
             '{"seq": null, "elapsed_s": 1.0}',
             '{"seq": 0, "elapsed_s": 1.0, "changed": 42}',
             '{"seq": 0, "elapsed_s": 1.0, "changed": "focus_id"}',
+            '{"seq": 0, "elapsed_s": 1.0, "changed": [1]}',
+            '{"seq": 1e999, "elapsed_s": 1.0}',
             '{"record_type": "header", "recorder_skew": []}',
         ],
     )
@@ -755,3 +757,83 @@ class TestCopilotRound:
         )
         assert result.exit_code == 2, result.output
         assert "bad --transcript" in result.output
+
+
+class TestOpusRound:
+    def test_elapsed_error_is_not_double_prefixed(self):
+        with pytest.raises(ValueError, match="line 1") as info:
+            load_monitor_log(['{"seq": 0}'])
+        assert str(info.value).count("line 1:") == 1
+
+    def test_repeat_does_not_jump_over_another_fields_focus_change(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtB").text = "x"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "3"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 2.0, 3.0]
+        assert "sub-interval-collapse" in tl.steps[1].flags
+
+    def test_suffix_repeat_does_not_jump_over_another_fields_focus_change(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtSZA11_0100-TEL_NUMBER").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtSZA11_0100-TEL_NUMBER").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtSZA11_0100-FAX_NUMBER").text = "3"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtSZA13_0100-TEL_NUMBER"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtSZA13_0100-FAX_NUMBER"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtSZA14_0100-TEL_NUMBER"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 2.0]
+        assert "sub-interval-collapse" in tl.steps[1].flags
+
+    def test_boilerplate_between_edits_does_not_hide_the_repeat(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]").resizeWorkingPane 1,1,false\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps if x.strategy == "exact-focus"] == [1.0, 5.0]
+
+    def test_repeat_leaves_an_event_for_each_later_edit_of_the_same_field(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "3"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 5.0]
+
+    def test_markdown_escapes_backslashes(self):
+        rec = Recording.parse('session.findById("wnd[0]/tbar[0]/btn[11]").press\n')
+        log = _log(
+            (1.0, [], {"wnd[0]:Text": "A", "screen_number": 3000}),
+            (2.0, ["wnd[0]:Text"], {"wnd[0]:Text": "B", "screen_number": 3000}),
+        )
+        tl = correlate(rec, log, transcript=(TranscriptEntry(1.5, 2.5, "C:" + chr(92) + "x | B"),))
+        row = next(line for line in tl.to_markdown().splitlines() if line.startswith("| 1 |"))
+        bs = chr(92)
+        assert row.endswith("| C:" + bs * 2 + "x " + bs + "| B |")
+
+    def test_watch_key_keeps_inner_capitals(self):
+        from sapsucker._correlate import _watch_key_of
+
+        assert _watch_key_of("x", "current_cellColumn") == "x:CurrentCellColumn"

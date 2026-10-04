@@ -95,6 +95,10 @@ class MonitorLog:
     clock_origin_assumed: bool = True
 
 
+class _LineError(ValueError):
+    """A ValueError whose message already names its line."""
+
+
 def _parse_elapsed(d: dict[str, Any], line_no: int) -> float:
     if "elapsed_s" in d:
         # ``float(None)`` and friends raise TypeError; the loader turns that into
@@ -104,7 +108,7 @@ def _parse_elapsed(d: dict[str, Any], line_no: int) -> float:
     m = _ISO_DURATION.match(raw) if isinstance(raw, str) else None
     # ``P`` / ``PT`` alone match the pattern but carry no component.
     if not m or not any(m.groups()):
-        raise ValueError(f"line {line_no}: sample {d.get('seq')}: no usable elapsed field ({raw!r})")
+        raise _LineError(f"line {line_no}: sample {d.get('seq')}: no usable elapsed field ({raw!r})")
     days, hours, minutes, seconds = m.groups()
     return int(days or 0) * 86400 + int(hours or 0) * 3600 + int(minutes or 0) * 60 + float(seconds or 0)
 
@@ -136,8 +140,8 @@ def load_monitor_log(lines: list[str]) -> MonitorLog:
             changed = d.get("changed")
             if changed is None:
                 changed = []
-            if not isinstance(changed, list):
-                raise TypeError(f"'changed' must be a list, got {type(changed).__name__}")
+            if not isinstance(changed, list) or not all(isinstance(c, str) for c in changed):
+                raise TypeError(f"'changed' must be a list of strings, got {changed!r}")
             samples.append(
                 MonitorSample(
                     seq=int(d.get("seq", len(samples))),
@@ -146,9 +150,9 @@ def load_monitor_log(lines: list[str]) -> MonitorLog:
                     values={k: v for k, v in d.items() if k not in _UNPACKED_KEYS},
                 )
             )
-        except (TypeError, ValueError) as exc:
-            if isinstance(exc, ValueError) and str(exc).startswith(f"line {line_no}:"):
-                raise
+        except _LineError:
+            raise
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError(f"line {line_no}: invalid field in monitor record: {exc}") from exc
     if not samples:
         raise ValueError("no samples in monitor log")
@@ -179,8 +183,10 @@ class TimelineStep:
     confidence: str
     t_start: float | None = None
     t_end: float | None = None
-    #: Authoring flags: ``layout-sensitive``, ``sub-interval-collapse``,
-    #: ``value-mismatch``, ``suffix-ambiguous``, ``clock-origin-assumed``.
+    #: Authoring flags: ``keyboard-anchor``, ``layout-sensitive``,
+    #: ``sub-interval-collapse``, ``value-mismatch``, ``suffix-ambiguous``.
+    #: Clock alignment is run metadata (``CorrelatedTimeline.clock_origin_assumed``),
+    #: not a step flag.
     flags: tuple[str, ...] = ()
     #: Status-bar text in force at the matched sample (the outcome signal a
     #: recording carries none of); None when unmatched or when the log has no
@@ -205,7 +211,9 @@ class CorrelatedTimeline:
 
         Field names are the dataclass fields; ``args`` serializes as a list
         (JSON has no tuples) and unset times stay ``null`` rather than being
-        dropped, so a consumer can distinguish "no window" from 0.
+        dropped, so a consumer can distinguish "no window" from 0. The run's
+        ``recorder_skew`` and ``clock_origin_assumed`` are repeated on every
+        record so a single line is self-describing.
         """
         lines = []
         for step in self.steps:
@@ -322,18 +330,48 @@ def _focus_on_suffix(suffix: str | None) -> Callable[[MonitorSample], bool]:
     return lambda sample: _focus_changed_to(sample, lambda seg: _ddic_suffix(seg) == suffix)
 
 
-def _is_repeat_anchor(steps_out: list[TimelineStep], idx: int, segment: str) -> bool:
-    """True when the previous *emitted* step is an exact-focus match that took
-    sample *idx* on the same field — i.e. this step would silently share the
-    previous step's anchor."""
-    if not steps_out:
-        return False
-    prev = steps_out[-1]
+def _is_repeat_anchor(prev: TimelineStep | None, segment: str) -> bool:
+    """True when the previous *matched* step (boilerplate rows excluded) was an
+    exact-focus or ddic-suffix match on the same field — i.e. this step would
+    silently share its anchor."""
     return (
-        prev.strategy in {"exact-focus", "ddic-suffix"}
+        prev is not None
+        and prev.strategy in {"exact-focus", "ddic-suffix"}
         and prev.t_start is not None
         and _last_segment(prev.element_id) == segment
     )
+
+
+def _later_unclaimed_focus(
+    log: MonitorLog,
+    idx: int,
+    pred: Callable[[MonitorSample], bool],
+    segment: str,
+    later_segments: list[str],
+) -> int | None:
+    """A later focus change for a repeated edit of *segment*, or None.
+
+    A repeat may skip over focus visits the recording never mentions (the
+    person clicked another field and came back), but it must not steal what a
+    *later recorded step* needs: the target is refused when later steps on the
+    same field would be left without an event, or when it lies beyond a focus
+    change onto a field a later step targets.
+    """
+    focus_samples = [j for j in range(idx + 1, len(log.samples)) if "focus_id" in log.samples[j].changed]
+    matching = [j for j in focus_samples if pred(log.samples[j])]
+    if len(matching) <= later_segments.count(segment):
+        return None
+    target = matching[0]
+    needed = set(later_segments) | {sfx for seg in later_segments if (sfx := _ddic_suffix(seg)) is not None}
+    for j in focus_samples:
+        if j >= target:
+            break
+        focus = log.samples[j].values.get("focus_id")
+        if isinstance(focus, str) and focus not in _SENTINELS:
+            seg = _last_segment(focus)
+            if seg in needed or _ddic_suffix(seg) in needed:
+                return None
+    return target
 
 
 @dataclass
@@ -437,7 +475,7 @@ def _watch_key_of(element_id: str, member: str) -> str | None:
     # (firstVisibleRow), sapsucker-style snake_case (first_visible_row)
     # normalizes to the same COM property name.
     if "_" in member:
-        camel = "".join(p.capitalize() for p in member.split("_"))
+        camel = "".join(p[:1].upper() + p[1:] for p in member.split("_"))
     else:
         camel = member[0].upper() + member[1:]
     return f"{element_id}:{camel}"
@@ -514,6 +552,7 @@ def correlate(
 
     for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
+        later_segments = [_last_segment(later.element_id) for later in recording.steps[i + 1 :]]
         if step.member in _BOILERPLATE_MEMBERS:
             steps_out.append(_emit(step, "recorder-boilerplate", flags=()))
             continue
@@ -588,12 +627,12 @@ def correlate(
         # 2: exact focus match
         if anchor is None:
             idx = _scan(log, cursor, _focus_on_segment(segment))
-            if idx is not None and _is_repeat_anchor(steps_out, idx, segment):
+            if idx is not None and _is_repeat_anchor(prev_matched, segment):
                 # A consecutive step on the same field matched the same sample the
                 # previous step already took: look for a *later* occurrence before
                 # accepting the shared anchor (two edits of one field bind to two
                 # focus changes when the log has both).
-                later = _scan(log, idx + 1, _focus_on_segment(segment))
+                later = _later_unclaimed_focus(log, idx, _focus_on_segment(segment), segment, later_segments)
                 if later is not None:
                     idx = later
                 else:
@@ -605,8 +644,8 @@ def correlate(
         if anchor is None and "-" in segment:
             suffix = _ddic_suffix(segment)
             idx = _scan(log, cursor, _focus_on_suffix(suffix))
-            if idx is not None and _is_repeat_anchor(steps_out, idx, segment):
-                later = _scan(log, idx + 1, _focus_on_suffix(suffix))
+            if idx is not None and _is_repeat_anchor(prev_matched, segment):
+                later = _later_unclaimed_focus(log, idx, _focus_on_suffix(suffix), segment, later_segments)
                 if later is not None:
                     idx = later
                 else:
