@@ -188,12 +188,63 @@ class CorrelatedTimeline:
     strategy_counts: dict[str, int] = field(default_factory=dict)
 
     def to_jsonl(self) -> str:
-        """One flat JSON object per step (task 5)."""
-        raise NotImplementedError
+        """One flat JSON object per step — the machine-readable timeline.
+
+        Field names are the dataclass fields; ``args`` serializes as a list
+        (JSON has no tuples) and unset times stay ``null`` rather than being
+        dropped, so a consumer can distinguish "no window" from 0.
+        """
+        lines = []
+        for step in self.steps:
+            d = {
+                "line_no": step.line_no,
+                "element_id": step.element_id,
+                "member": step.member,
+                "args": list(step.args) if step.args is not None else None,
+                "strategy": step.strategy,
+                "confidence": step.confidence,
+                "t_start": step.t_start,
+                "t_end": step.t_end,
+                "flags": list(step.flags),
+                "sbar_text": step.sbar_text,
+                "transcript": list(step.transcript),
+            }
+            lines.append(json.dumps(d, ensure_ascii=False))
+        return "\n".join(lines) + ("\n" if lines else "")
 
     def to_markdown(self) -> str:
-        """A human-readable merged journey document (task 5)."""
-        raise NotImplementedError
+        """The human-readable merged journey document.
+
+        Acceptance bar (plan doc): "the timeline reads as a plausible
+        description of the task to someone who wasn't there" — hence the
+        run-metadata header (clock alignment!) before the per-step table.
+        """
+        out: list[str] = ["# Correlated journey timeline", ""]
+        if self.recording_path:
+            out.append(f"Recording: `{self.recording_path}`")
+        if self.recorder_skew is not None:
+            out.append(f"Recorder started {self.recorder_skew:.3f}s after the sampler origin (measured, `--record` header).")
+        if self.clock_origin_assumed:
+            out.append(
+                "Clock alignment: **assumed** — this log has no `--record` header, so monitor origin ≈ "
+                "recording start (manual pairing). Timestamps carry that skew."
+            )
+        counts = ", ".join(f"{n} {name}" for name, n in sorted(self.strategy_counts.items()))
+        out.append(f"Steps: {counts}.")
+        out.append("")
+        out.append("| line | member | t_start | t_end | strategy | confidence | flags | status bar | transcript |")
+        out.append("|---|---|---|---|---|---|---|---|---|")
+        for step in self.steps:
+            t_start = "—" if step.t_start is None else f"{step.t_start:.3f}"
+            t_end = "—" if step.t_end is None else f"{step.t_end:.3f}"
+            sbar = (step.sbar_text or "")[:40]
+            narr = " / ".join(step.transcript)
+            out.append(
+                f"| {step.line_no} | {step.member} | {t_start} | {t_end} "
+                f"| {step.strategy} | {step.confidence} | {', '.join(step.flags)} | {sbar} | {narr} |"
+            )
+        out.append("")
+        return "\n".join(out)
 
 
 #: Recorder boilerplate that moves no observable state — labelled, never matched.
@@ -593,6 +644,8 @@ def correlate(
         steps_out.append(_emit(step, "unmatched"))
         prev_matched = steps_out[-1]
 
+    steps_out = _attach_transcripts(steps_out, transcript)
+
     return CorrelatedTimeline(
         steps=steps_out,
         recording_path=recording.path,
@@ -600,6 +653,35 @@ def correlate(
         clock_origin_assumed=log.clock_origin_assumed,
         strategy_counts=dict(Counter(s.strategy for s in steps_out)),
     )
+
+
+#: A transcript excerpt attaches when it overlaps the step's window widened by
+#: this much: a person starts talking about a step slightly before/after the
+#: screen reacts. Steps without a window use ± the same slack around t_start.
+_TRANSCRIPT_SLACK = 2.0
+
+
+def _attach_transcripts(
+    steps_out: list[TimelineStep], transcript: tuple[TranscriptEntry, ...]
+) -> list[TimelineStep]:
+    """Attach verbatim excerpts intersecting each step's widened window.
+
+    Rebuilding the frozen dataclasses rather than mutating: the timeline is a
+    value, and a caller holding a step must not see it grow an excerpt.
+    """
+    if not transcript:
+        return steps_out
+    rebuilt: list[TimelineStep] = []
+    for step in steps_out:
+        lo = (step.t_start - _TRANSCRIPT_SLACK) if step.t_start is not None else None
+        hi = (step.t_end if step.t_end is not None else (step.t_start + _TRANSCRIPT_SLACK)) if step.t_start is not None else None
+        excerpts = tuple(
+            entry.text
+            for entry in transcript
+            if lo is not None and entry.t_start <= hi and entry.t_end >= lo
+        )
+        rebuilt.append(TimelineStep(**{**step.__dict__, "transcript": excerpts}))
+    return rebuilt
 
 
 def _emit(

@@ -371,3 +371,74 @@ class TestJourney6Acceptance:
         assert counts["fingerprint-screen"] == 1
         assert counts["recorder-boilerplate"] == 1
         assert counts["unmatched"] == 0, counts
+
+
+class TestSbarAndTranscript:
+    def test_sbar_text_attached_at_anchor(self):
+        rec = Recording.parse('session.findById("wnd[0]/usr/ctxtGD-TAB").text = "T000"\n')
+        log = _log(
+            (0.5, ["sbar_text"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtGD-TAB", "sbar_text": "4 Einträge gefunden"}),
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtGD-TAB", "sbar_text": "4 Einträge gefunden"}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].sbar_text == "4 Einträge gefunden"
+
+    def test_sbar_none_without_sbar_keys(self):
+        rec = Recording.parse('session.findById("wnd[0]/usr/ctxtGD-TAB").text = "T000"\n')
+        log = _log((1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtGD-TAB"}))
+        tl = correlate(rec, log)
+        assert tl.steps[0].sbar_text is None
+
+    def test_transcript_intersects_window(self):
+        rec = Recording.parse('session.findById("wnd[0]/tbar[0]/btn[11]").press\n')
+        log = _log(
+            (1.0, [], {"wnd[0]:Text": "A", "screen_number": 3000}),
+            (2.0, ["wnd[0]:Text"], {"wnd[0]:Text": "B", "screen_number": 3000}),
+        )
+        entries = (
+            TranscriptEntry(1.5, 2.5, "jetzt speichere ich"),
+            TranscriptEntry(8.0, 9.0, "fertig"),
+        )
+        tl = correlate(rec, log, transcript=entries)
+        assert tl.steps[0].transcript == ("jetzt speichere ich",)
+
+    def test_transcript_outside_window_not_attached(self):
+        rec = Recording.parse('session.findById("wnd[0]/tbar[0]/btn[11]").press\n')
+        log = _log(
+            (1.0, [], {"wnd[0]:Text": "A", "screen_number": 3000}),
+            (2.0, ["wnd[0]:Text"], {"wnd[0]:Text": "B", "screen_number": 3000}),
+        )
+        entries = (TranscriptEntry(8.0, 9.0, "fertig"),)
+        tl = correlate(rec, log, transcript=entries)
+        assert tl.steps[0].transcript == ()
+
+
+class TestRender:
+    def _tl(self):
+        rec = Recording.parse(self_REC)
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell"}),
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd"}),
+        )
+        return correlate(rec, log)
+
+    def test_jsonl_shape(self):
+        tl = self._tl()
+        rows = [json.loads(line) for line in tl.to_jsonl().splitlines()]
+        assert len(rows) == len(tl.steps)
+        first = rows[0]
+        assert first["line_no"] == 1
+        assert first["strategy"] == "recorder-boilerplate"
+        assert first["args"] == ["152", "33", "false"]
+        assert first["t_start"] is None
+
+    def test_markdown_has_table_and_summary(self):
+        md = self._tl().to_markdown()
+        assert "exact-focus" in md
+        assert "| line |" in md
+
+
+self_REC = (
+    'session.findById("wnd[0]").resizeWorkingPane 152,33,false\n'
+    'session.findById("wnd[0]/tbar[0]/okcd").text = "/nse16n"\n'
+)
