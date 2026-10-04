@@ -182,6 +182,54 @@ class TestModalBracket:
         tl = correlate(rec, log)
         assert [(x.t_start, x.t_end) for x in tl.steps] == [(1.0, 2.0), (1.0, 2.0)]
 
+    def test_focus_returning_on_the_close_sample_does_not_reuse_the_closed_modal(self):
+        # The close sample is the first one without the modal, and focus usually
+        # returns to wnd[0] on that very sample: the wnd[0] step then sits *at*
+        # close_idx, and the next wnd[1] step must take the second modal.
+        rec = Recording.parse(
+            'session.findById("wnd[1]/usr/btnA").press\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "x"\n'
+            'session.findById("wnd[1]/usr/btnB").press\n'
+        )
+        log = _log(
+            (1.0, ["wnd[1]:Text"], {"wnd[1]:Text": "First", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (2.0, ["wnd[1]:Text", "focus_id"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr/txtZ"}),
+            (5.0, ["wnd[1]:Text"], {"wnd[1]:Text": "Second", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (6.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+        )
+        tl = correlate(rec, log)
+        assert (tl.steps[0].t_start, tl.steps[0].t_end) == (1.0, 2.0)
+        assert (tl.steps[2].t_start, tl.steps[2].t_end) == (5.0, 6.0)
+
+    def test_modal_closed_at_the_cursor_is_skipped_when_no_sibling_cached_it(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtZ").text = "x"\nsession.findById("wnd[1]/usr/btnB").press\n'
+        )
+        log = _log(
+            (1.0, ["wnd[1]:Text"], {"wnd[1]:Text": "First", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (2.0, ["wnd[1]:Text", "focus_id"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr/txtZ"}),
+            (5.0, ["wnd[1]:Text"], {"wnd[1]:Text": "Second", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (6.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+        )
+        tl = correlate(rec, log)
+        assert (tl.steps[1].t_start, tl.steps[1].t_end) == (5.0, 6.0)
+
+    def test_siblings_share_modal_after_cursor_moved_inside_it(self):
+        rec = Recording.parse(
+            'session.findById("wnd[1]/usr/txtX").text = "1"\n'
+            'session.findById("wnd[1]/usr/btnA").press\n'
+            'session.findById("wnd[1]/usr/btnB").press\n'
+        )
+        log = _log(
+            (1.0, ["wnd[1]:Text"], {"wnd[1]:Text": "First", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+            (2.0, ["focus_id"], {"wnd[1]:Text": "First", "focus_id": f"{FOCUS}/wnd[1]/usr/txtX"}),
+            (3.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+            (5.0, ["wnd[1]:Text"], {"wnd[1]:Text": "Second", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (6.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+        )
+        tl = correlate(rec, log)
+        assert [(x.t_start, x.t_end) for x in tl.steps[1:]] == [(2.0, 3.0), (2.0, 3.0)]
+
     def test_press_after_typing_into_the_same_modal_still_matches_it(self):
         # Typing into the dialog moves the cursor past the bracket's open sample;
         # the confirming press must still bind to that dialog, not go unmatched.
@@ -602,3 +650,4 @@ class TestCli:
             app, [str(bad), str(SPIKE / "journey5_timing.jsonl"), "--out", str(tmp_path / "t.jsonl")]
         )
         assert result.exit_code == 2, result.output
+        assert "bad recording" in result.output

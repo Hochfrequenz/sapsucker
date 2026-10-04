@@ -364,15 +364,15 @@ def _modal_bracket_for(
     prefix = f"wnd[{m.group(1)}]"
     cached = used.get(prefix)
     # Sibling steps inside one modal share its bracket for as long as the cursor
-    # has not moved past its close: a ``wnd[0]`` step matched after the modal
-    # closed pushes the cursor beyond it, and the next ``wnd[N]`` step then
-    # takes the next bracket.
-    if cached is not None and cached.close_idx >= cursor:
+    # has not reached its close sample (the first one where the modal is gone): a
+    # ``wnd[0]`` step matched at or after that sample moves the cursor there, and
+    # the next ``wnd[N]`` step then takes the next bracket.
+    if cached is not None and cached.close_idx > cursor:
         return cached
     for bracket in brackets:
         # A bracket still open at the cursor is usable (an earlier step typed
-        # into the dialog, and this one confirms it); only fully-past ones skip.
-        if bracket.key != f"{prefix}:Text" or bracket.close_idx < cursor:
+        # into the dialog, and this one confirms it); only brackets already closed at the cursor skip.
+        if bracket.key != f"{prefix}:Text" or bracket.close_idx <= cursor:
             continue
         if any(b.key == bracket.key and b.open_idx == bracket.open_idx for b in used.values()):
             continue  # this exact bracket was consumed by an earlier modal
