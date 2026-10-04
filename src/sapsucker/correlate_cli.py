@@ -94,14 +94,14 @@ def main(
         raise typer.Exit(code=2) from exc
     try:
         log = load_monitor_log(monitor_log.read_text(encoding="utf-8").splitlines())
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         typer.secho(f"bad monitor log: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
     entries: tuple[TranscriptEntry, ...] = ()
     if transcript is not None:
         try:
             entries = parse_srt(transcript.read_text(encoding="utf-8-sig"))
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             typer.secho(f"bad --transcript: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=2) from exc
 

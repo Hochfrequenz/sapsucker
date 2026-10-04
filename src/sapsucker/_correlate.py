@@ -97,6 +97,8 @@ class MonitorLog:
 
 def _parse_elapsed(d: dict[str, Any], line_no: int) -> float:
     if "elapsed_s" in d:
+        # ``float(None)`` and friends raise TypeError; the loader turns that into
+        # a line-numbered ValueError.
         return float(d["elapsed_s"])
     raw = d.get("elapsed")
     m = _ISO_DURATION.match(raw) if isinstance(raw, str) else None
@@ -126,18 +128,28 @@ def load_monitor_log(lines: list[str]) -> MonitorLog:
             raise ValueError(f"line {line_no}: not JSON: {raw[:80]!r}") from exc
         if not isinstance(d, dict):
             raise ValueError(f"line {line_no}: expected a JSON object, got {type(d).__name__}")
-        if d.get("record_type") == "header":
-            skew = d.get("recorder_skew")
-            recorder_skew = float(skew) if skew is not None else None
-            continue
-        samples.append(
-            MonitorSample(
-                seq=int(d.get("seq", len(samples))),
-                elapsed=_parse_elapsed(d, line_no),
-                changed=frozenset(d.get("changed") or ()),
-                values={k: v for k, v in d.items() if k not in _UNPACKED_KEYS},
+        try:
+            if d.get("record_type") == "header":
+                skew = d.get("recorder_skew")
+                recorder_skew = float(skew) if skew is not None else None
+                continue
+            changed = d.get("changed")
+            if changed is None:
+                changed = []
+            if not isinstance(changed, list):
+                raise TypeError(f"'changed' must be a list, got {type(changed).__name__}")
+            samples.append(
+                MonitorSample(
+                    seq=int(d.get("seq", len(samples))),
+                    elapsed=_parse_elapsed(d, line_no),
+                    changed=frozenset(changed),
+                    values={k: v for k, v in d.items() if k not in _UNPACKED_KEYS},
+                )
             )
-        )
+        except (TypeError, ValueError) as exc:
+            if isinstance(exc, ValueError) and str(exc).startswith(f"line {line_no}:"):
+                raise
+            raise ValueError(f"line {line_no}: invalid field in monitor record: {exc}") from exc
     if not samples:
         raise ValueError("no samples in monitor log")
     return MonitorLog(samples=samples, recorder_skew=recorder_skew, clock_origin_assumed=recorder_skew is None)
@@ -209,6 +221,8 @@ class CorrelatedTimeline:
                 "flags": list(step.flags),
                 "sbar_text": step.sbar_text,
                 "transcript": list(step.transcript),
+                "recorder_skew": self.recorder_skew,
+                "clock_origin_assumed": self.clock_origin_assumed,
             }
             lines.append(json.dumps(d, ensure_ascii=False))
         return "\n".join(lines) + ("\n" if lines else "")
@@ -240,14 +254,19 @@ class CorrelatedTimeline:
         for step in self.steps:
             t_start = "—" if step.t_start is None else f"{step.t_start:.3f}"
             t_end = "—" if step.t_end is None else f"{step.t_end:.3f}"
-            sbar = (step.sbar_text or "")[:40]
-            narr = " / ".join(step.transcript)
+            sbar = _md_cell((step.sbar_text or "")[:40])
+            narr = _md_cell(" / ".join(step.transcript))
             out.append(
                 f"| {step.line_no} | {step.member} | {t_start} | {t_end} "
                 f"| {step.strategy} | {step.confidence} | {', '.join(step.flags)} | {sbar} | {narr} |"
             )
         out.append("")
         return "\n".join(out)
+
+
+def _md_cell(text: str) -> str:
+    """Make free text safe inside one markdown table cell."""
+    return " ".join(text.replace("\\", "\\\\").replace("|", "\\|").split())
 
 
 #: Recorder boilerplate that moves no observable state — labelled, never matched.
@@ -310,7 +329,11 @@ def _is_repeat_anchor(steps_out: list[TimelineStep], idx: int, segment: str) -> 
     if not steps_out:
         return False
     prev = steps_out[-1]
-    return prev.strategy == "exact-focus" and prev.t_start is not None and _last_segment(prev.element_id) == segment
+    return (
+        prev.strategy in {"exact-focus", "ddic-suffix"}
+        and prev.t_start is not None
+        and _last_segment(prev.element_id) == segment
+    )
 
 
 @dataclass
@@ -414,8 +437,7 @@ def _watch_key_of(element_id: str, member: str) -> str | None:
     # (firstVisibleRow), sapsucker-style snake_case (first_visible_row)
     # normalizes to the same COM property name.
     if "_" in member:
-        parts = member.split("_")
-        camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+        camel = "".join(p.capitalize() for p in member.split("_"))
     else:
         camel = member[0].upper() + member[1:]
     return f"{element_id}:{camel}"
@@ -574,6 +596,8 @@ def correlate(
                 later = _scan(log, idx + 1, _focus_on_segment(segment))
                 if later is not None:
                     idx = later
+                else:
+                    flags.append("sub-interval-collapse")  # two edits, one observed event
             if idx is not None:
                 anchor, strategy = idx, "exact-focus"
 
@@ -581,6 +605,12 @@ def correlate(
         if anchor is None and "-" in segment:
             suffix = _ddic_suffix(segment)
             idx = _scan(log, cursor, _focus_on_suffix(suffix))
+            if idx is not None and _is_repeat_anchor(steps_out, idx, segment):
+                later = _scan(log, idx + 1, _focus_on_suffix(suffix))
+                if later is not None:
+                    idx = later
+                else:
+                    flags.append("sub-interval-collapse")
             if idx is not None:
                 anchor, strategy = idx, "ddic-suffix"
                 flags.append("layout-sensitive")

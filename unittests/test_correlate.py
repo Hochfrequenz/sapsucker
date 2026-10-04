@@ -651,3 +651,107 @@ class TestCli:
         )
         assert result.exit_code == 2, result.output
         assert "bad recording" in result.output
+
+
+class TestCopilotRound:
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '{"seq": 0, "elapsed_s": null}',
+            '{"seq": null, "elapsed_s": 1.0}',
+            '{"seq": 0, "elapsed_s": 1.0, "changed": 42}',
+            '{"seq": 0, "elapsed_s": 1.0, "changed": "focus_id"}',
+            '{"record_type": "header", "recorder_skew": []}',
+        ],
+    )
+    def test_wrong_field_types_raise_line_numbered_value_error(self, line):
+        with pytest.raises(ValueError, match="line 1"):
+            load_monitor_log([line])
+
+    def test_jsonl_carries_alignment_metadata(self):
+        rec = Recording.parse('session.findById("wnd[0]/usr/txtA").text = "1"\n')
+        row = {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}
+        assumed = correlate(rec, _log((1.0, ["focus_id"], row)))
+        record = json.loads(assumed.to_jsonl().splitlines()[0])
+        assert record["clock_origin_assumed"] is True
+        assert record["recorder_skew"] is None
+        measured = correlate(
+            rec,
+            load_monitor_log(
+                [
+                    json.dumps({"record_type": "header", "recorder_skew": 1.5}),
+                    json.dumps({"seq": 0, "elapsed_s": 1.0, "changed": ["focus_id"], **row}),
+                ]
+            ),
+        )
+        record = json.loads(measured.to_jsonl().splitlines()[0])
+        assert record["clock_origin_assumed"] is False
+        assert record["recorder_skew"] == 1.5
+
+    def test_markdown_cells_are_escaped(self):
+        rec = Recording.parse('session.findById("wnd[0]/tbar[0]/btn[11]").press\n')
+        log = _log(
+            (1.0, [], {"wnd[0]:Text": "A", "screen_number": 3000}),
+            (2.0, ["wnd[0]:Text"], {"wnd[0]:Text": "B", "screen_number": 3000}),
+        )
+        tl = correlate(rec, log, transcript=(TranscriptEntry(1.5, 2.5, "A | B\nC"),))
+        row = next(line for line in tl.to_markdown().splitlines() if line.startswith("| 1 |"))
+        assert row.endswith("| A \\| B C |")
+        assert row.replace("\\|", "").count("|") == 10  # 9 cells
+
+    def test_snake_case_and_camel_case_members_share_one_watch_key(self):
+        from sapsucker._correlate import _watch_key_of
+
+        shell = "wnd[0]/shellcont/shell"
+        assert _watch_key_of(shell, "first_visible_row") == f"{shell}:FirstVisibleRow"
+        assert _watch_key_of(shell, "firstVisibleRow") == f"{shell}:FirstVisibleRow"
+
+    def test_repeated_edit_with_one_observed_event_is_flagged_collapsed(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\nsession.findById("wnd[0]/usr/txtA").text = "2"\n'
+        )
+        log = _log((1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}))
+        tl = correlate(rec, log)
+        assert "sub-interval-collapse" not in tl.steps[0].flags
+        assert "sub-interval-collapse" in tl.steps[1].flags
+
+    def test_repeated_suffix_edit_takes_the_later_focus_change(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtSZA11_0100-TEL_NUMBER").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtSZA11_0100-TEL_NUMBER").text = "2"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtSZA13_0100-TEL_NUMBER"}),
+            (9.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtSZA13_0100-TEL_NUMBER"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.strategy for x in tl.steps] == ["ddic-suffix", "ddic-suffix"]
+        assert [x.t_start for x in tl.steps] == [1.0, 9.0]
+
+    def test_repeated_suffix_edit_with_one_event_is_flagged_collapsed(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtSZA11_0100-TEL_NUMBER").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtSZA11_0100-TEL_NUMBER").text = "2"\n'
+        )
+        log = _log((1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtSZA13_0100-TEL_NUMBER"}))
+        tl = correlate(rec, log)
+        assert "sub-interval-collapse" not in tl.steps[0].flags
+        assert "sub-interval-collapse" in tl.steps[1].flags
+
+    def test_cli_unreadable_transcript_exits_2(self, tmp_path):
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
+        from sapsucker.correlate_cli import app
+
+        result = CliRunner().invoke(
+            app,
+            [
+                str(SPIKE / "journey5_bp.vbs"),
+                str(SPIKE / "journey5_timing.jsonl"),
+                "--transcript",
+                str(tmp_path),  # a directory: read_text raises OSError
+                "--out",
+                str(tmp_path / "t.jsonl"),
+            ],
+        )
+        assert result.exit_code == 2, result.output
+        assert "bad --transcript" in result.output
