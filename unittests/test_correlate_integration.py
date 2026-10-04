@@ -80,9 +80,7 @@ class TestLiveCorrelation:
         for _ in range(10):  # tail: let the final transition land
             samples.append(next(gen))
 
-        log = load_monitor_log(
-            [__import__("json").dumps(s.as_record(), ensure_ascii=False) for s in samples]
-        )
+        log = load_monitor_log([__import__("json").dumps(s.as_record(), ensure_ascii=False) for s in samples])
         tl = correlate(journey, log)
 
         counts = tl.strategy_counts

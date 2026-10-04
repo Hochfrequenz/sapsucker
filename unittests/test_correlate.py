@@ -24,10 +24,7 @@ J6 = os.environ.get("SAPSUCKER_CORRELATE_J6")
 def _log(*rows):
     """Build a MonitorLog from (elapsed, changed, values) rows (v2 flat schema)."""
     return load_monitor_log(
-        [
-            json.dumps({"seq": i, "elapsed_s": e, "changed": list(c), **v})
-            for i, (e, c, v) in enumerate(rows)
-        ]
+        [json.dumps({"seq": i, "elapsed_s": e, "changed": list(c), **v}) for i, (e, c, v) in enumerate(rows)]
     )
 
 
@@ -66,8 +63,7 @@ class TestMatcherBasics:
         # Two steps on the same field: the second must bind to the *later*
         # sample, not re-match the first step's anchor.
         rec = Recording.parse(
-            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
-            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "1"\nsession.findById("wnd[0]/usr/txtA").text = "2"\n'
         )
         log = _log(
             (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
@@ -102,8 +98,7 @@ class TestMatcherBasics:
         # The log's txtB change happens *before* txtA's; step 2 (txtB) must not
         # reach back before step 1's anchor — the timeline stays monotonic.
         rec = Recording.parse(
-            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
-            'session.findById("wnd[0]/usr/txtB").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "1"\nsession.findById("wnd[0]/usr/txtB").text = "2"\n'
         )
         log = _log(
             (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
@@ -153,10 +148,7 @@ class TestModalBracket:
     def test_two_sequential_modals_get_separate_brackets(self):
         # Two wnd[1] dialogs at different times: each press binds to its own
         # bracket, not the first one forever.
-        rec = Recording.parse(
-            'session.findById("wnd[1]/usr/btnA").press\n'
-            'session.findById("wnd[1]/usr/btnB").press\n'
-        )
+        rec = Recording.parse('session.findById("wnd[1]/usr/btnA").press\nsession.findById("wnd[1]/usr/btnB").press\n')
         log = _log(
             (1.0, ["focus_id"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
             (2.0, ["focus_id", "wnd[1]:Text"], {"wnd[1]:Text": "First", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
@@ -177,12 +169,19 @@ class TestFingerprints:
         # focus — the keyboard-anchor case observed live), so it must bind to
         # the transition its sendVKey causes, and the sendVKey inherits it.
         rec = Recording.parse(
-            'session.findById("wnd[0]/tbar[0]/okcd").text = "/nbp"\n'
-            'session.findById("wnd[0]").sendVKey 0\n'
+            'session.findById("wnd[0]/tbar[0]/okcd").text = "/nbp"\nsession.findById("wnd[0]").sendVKey 0\n'
         )
         log = _log(
-            (1.0, [], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd", "transaction": "SESSION_MANAGER", "screen_number": 100}),
-            (2.5, ["transaction", "program", "screen_number"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd", "transaction": "BP", "screen_number": 3000}),
+            (
+                1.0,
+                [],
+                {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd", "transaction": "SESSION_MANAGER", "screen_number": 100},
+            ),
+            (
+                2.5,
+                ["transaction", "program", "screen_number"],
+                {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd", "transaction": "BP", "screen_number": 3000},
+            ),
         )
         tl = correlate(rec, log)
         assert tl.steps[0].strategy == "fingerprint-screen"
@@ -198,8 +197,20 @@ class TestFingerprints:
         # title fingerprint can timestamp this press.
         rec = Recording.parse('session.findById("wnd[0]/tbar[0]/btn[11]").press\n')
         log = _log(
-            (1.0, [], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/btn[11]", "wnd[0]:Text": "Person anlegen", "screen_number": 3000}),
-            (2.0, ["wnd[0]:Text"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/btn[11]", "wnd[0]:Text": "Person anzeigen: 3961", "screen_number": 3000}),
+            (
+                1.0,
+                [],
+                {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/btn[11]", "wnd[0]:Text": "Person anlegen", "screen_number": 3000},
+            ),
+            (
+                2.0,
+                ["wnd[0]:Text"],
+                {
+                    "focus_id": f"{FOCUS}/wnd[0]/tbar[0]/btn[11]",
+                    "wnd[0]:Text": "Person anzeigen: 3961",
+                    "screen_number": 3000,
+                },
+            ),
         )
         tl = correlate(rec, log)
         assert tl.steps[0].strategy == "fingerprint-title"
@@ -491,15 +502,7 @@ class TestCli:
     def test_parse_srt_round_trip(self):
         from sapsucker.correlate_cli import parse_srt
 
-        srt = (
-            "1\n"
-            "00:00:01,500 --> 00:00:02,500\n"
-            "jetzt speichere ich\n"
-            "\n"
-            "2\n"
-            "00:00:08,000 --> 00:00:09,000\n"
-            "fertig\n"
-        )
+        srt = "1\n00:00:01,500 --> 00:00:02,500\njetzt speichere ich\n\n2\n00:00:08,000 --> 00:00:09,000\nfertig\n"
         entries = parse_srt(srt)
         assert len(entries) == 2
         assert entries[0].t_start == pytest.approx(1.5)

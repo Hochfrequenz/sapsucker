@@ -33,7 +33,9 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from sapsucker._recording import Recording, RecordingStep
 
@@ -41,8 +43,8 @@ __all__ = [
     "CorrelatedTimeline",
     "MonitorLog",
     "MonitorSample",
-    "TranscriptEntry",
     "TimelineStep",
+    "TranscriptEntry",
     "correlate",
     "load_monitor_log",
 ]
@@ -78,7 +80,7 @@ class MonitorSample:
     #: the ISO-8601 duration ``elapsed``).
     elapsed: float
     changed: frozenset[str]
-    values: dict
+    values: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,7 @@ class MonitorLog:
     clock_origin_assumed: bool = True
 
 
-def _parse_elapsed(d: dict, line_no: int) -> float:
+def _parse_elapsed(d: dict[str, Any], line_no: int) -> float:
     if "elapsed_s" in d:
         return float(d["elapsed_s"])
     raw = d.get("elapsed")
@@ -113,8 +115,8 @@ def load_monitor_log(lines: list[str]) -> MonitorLog:
     """
     samples: list[MonitorSample] = []
     recorder_skew: float | None = None
-    for line_no, raw in enumerate(lines, 1):
-        raw = raw.strip()
+    for line_no, line in enumerate(lines, 1):
+        raw = line.strip()
         if not raw:
             continue
         try:
@@ -137,9 +139,7 @@ def load_monitor_log(lines: list[str]) -> MonitorLog:
         )
     if not samples:
         raise ValueError("no samples in monitor log")
-    return MonitorLog(
-        samples=samples, recorder_skew=recorder_skew, clock_origin_assumed=recorder_skew is None
-    )
+    return MonitorLog(samples=samples, recorder_skew=recorder_skew, clock_origin_assumed=recorder_skew is None)
 
 
 @dataclass(frozen=True)
@@ -223,7 +223,9 @@ class CorrelatedTimeline:
         if self.recording_path:
             out.append(f"Recording: `{self.recording_path}`")
         if self.recorder_skew is not None:
-            out.append(f"Recorder started {self.recorder_skew:.3f}s after the sampler origin (measured, `--record` header).")
+            out.append(
+                f"Recorder started {self.recorder_skew:.3f}s after the sampler origin (measured, `--record` header)."
+            )
         if self.clock_origin_assumed:
             out.append(
                 "Clock alignment: **assumed** — this log has no `--record` header, so monitor origin ≈ "
@@ -275,7 +277,7 @@ def _ddic_suffix(segment: str) -> str | None:
     return segment.rsplit("-", 1)[-1] if "-" in segment else None
 
 
-def _scan(log: MonitorLog, start: int, pred) -> int | None:
+def _scan(log: MonitorLog, start: int, pred: Callable[[MonitorSample], bool]) -> int | None:
     """First sample index >= start satisfying pred, else None."""
     for i in range(start, len(log.samples)):
         if pred(log.samples[i]):
@@ -283,13 +285,21 @@ def _scan(log: MonitorLog, start: int, pred) -> int | None:
     return None
 
 
-def _focus_changed_to(sample: MonitorSample, pred) -> bool:
+def _focus_changed_to(sample: MonitorSample, pred: Callable[[str], bool]) -> bool:
     if "focus_id" not in sample.changed:
         return False
     focus = sample.values.get("focus_id")
     if not isinstance(focus, str) or focus in _SENTINELS:
         return False
-    return pred(_last_segment(focus))
+    return bool(pred(_last_segment(focus)))
+
+
+def _focus_on_segment(segment: str) -> Callable[[MonitorSample], bool]:
+    return lambda sample: _focus_changed_to(sample, lambda seg: seg == segment)
+
+
+def _focus_on_suffix(suffix: str | None) -> Callable[[MonitorSample], bool]:
+    return lambda sample: _focus_changed_to(sample, lambda seg: _ddic_suffix(seg) == suffix)
 
 
 def _is_repeat_anchor(steps_out: list[TimelineStep], idx: int, segment: str) -> bool:
@@ -299,11 +309,7 @@ def _is_repeat_anchor(steps_out: list[TimelineStep], idx: int, segment: str) -> 
     if not steps_out:
         return False
     prev = steps_out[-1]
-    return (
-        prev.strategy == "exact-focus"
-        and prev.t_start is not None
-        and _last_segment(prev.element_id) == segment
-    )
+    return prev.strategy == "exact-focus" and prev.t_start is not None and _last_segment(prev.element_id) == segment
 
 
 @dataclass
@@ -327,7 +333,7 @@ def _modal_brackets(log: MonitorLog) -> list[_ModalBracket]:
     text_keys = sorted(k for k in log.samples[0].values if re.fullmatch(r"wnd\[\d+\]:Text", k))
     brackets: list[_ModalBracket] = []
     for key in text_keys:
-        n = int(re.match(r"wnd\[(\d+)\]", key).group(1))
+        n = int(key[len("wnd[") : key.index("]")])
         if n == 0:
             continue  # the main window's title is the fingerprint signal, not a modal
         open_idx: int | None = None
@@ -490,7 +496,6 @@ def correlate(
     cursor = 0
     prev_matched: TimelineStep | None = None
     used_modals: dict[str, _ModalBracket] = {}
-    t_end_bracket: int | None = None
 
     for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
@@ -567,13 +572,13 @@ def correlate(
 
         # 2: exact focus match
         if anchor is None:
-            idx = _scan(log, cursor, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
+            idx = _scan(log, cursor, _focus_on_segment(segment))
             if idx is not None and _is_repeat_anchor(steps_out, idx, segment):
                 # A consecutive step on the same field matched the same sample the
                 # previous step already took: look for a *later* occurrence before
                 # accepting the shared anchor (two edits of one field bind to two
                 # focus changes when the log has both).
-                later = _scan(log, idx + 1, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
+                later = _scan(log, idx + 1, _focus_on_segment(segment))
                 if later is not None:
                     idx = later
             if idx is not None:
@@ -582,14 +587,14 @@ def correlate(
         # 3: DDIC-field-suffix match
         if anchor is None and "-" in segment:
             suffix = _ddic_suffix(segment)
-            idx = _scan(log, cursor, lambda s: _focus_changed_to(s, lambda seg: _ddic_suffix(seg) == suffix))
+            idx = _scan(log, cursor, _focus_on_suffix(suffix))
             if idx is not None:
                 anchor, strategy = idx, "ddic-suffix"
                 flags.append("layout-sensitive")
                 ambiguous = _scan(
                     log,
                     idx + 1,
-                    lambda s: _focus_changed_to(s, lambda seg: _ddic_suffix(seg) == suffix),
+                    _focus_on_suffix(suffix),
                 )
                 if ambiguous is not None:
                     flags.append("suffix-ambiguous")
@@ -677,6 +682,7 @@ def correlate(
                 continue
 
         if anchor is not None:
+            assert strategy is not None
             sample = log.samples[anchor]
             t_end_elapsed = log.samples[t_end].elapsed if t_end is not None else None
             steps_out.append(
@@ -717,9 +723,7 @@ def correlate(
 _TRANSCRIPT_SLACK = 2.0
 
 
-def _attach_transcripts(
-    steps_out: list[TimelineStep], transcript: tuple[TranscriptEntry, ...]
-) -> list[TimelineStep]:
+def _attach_transcripts(steps_out: list[TimelineStep], transcript: tuple[TranscriptEntry, ...]) -> list[TimelineStep]:
     """Attach verbatim excerpts intersecting each step's widened window.
 
     Rebuilding the frozen dataclasses rather than mutating: the timeline is a
@@ -729,13 +733,12 @@ def _attach_transcripts(
         return steps_out
     rebuilt: list[TimelineStep] = []
     for step in steps_out:
-        lo = (step.t_start - _TRANSCRIPT_SLACK) if step.t_start is not None else None
-        hi = (step.t_end if step.t_end is not None else (step.t_start + _TRANSCRIPT_SLACK)) if step.t_start is not None else None
-        excerpts = tuple(
-            entry.text
-            for entry in transcript
-            if lo is not None and entry.t_start <= hi and entry.t_end >= lo
-        )
+        if step.t_start is None:
+            excerpts: tuple[str, ...] = ()
+        else:
+            lo = step.t_start - _TRANSCRIPT_SLACK
+            hi = step.t_end if step.t_end is not None else step.t_start + _TRANSCRIPT_SLACK
+            excerpts = tuple(entry.text for entry in transcript if entry.t_start <= hi and entry.t_end >= lo)
         rebuilt.append(TimelineStep(**{**step.__dict__, "transcript": excerpts}))
     return rebuilt
 

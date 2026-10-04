@@ -50,7 +50,7 @@ def parse_srt(text: str) -> tuple[TranscriptEntry, ...]:
     entries: list[TranscriptEntry] = []
     current: tuple[float, float] | None = None
     chunks: list[str] = []
-    for raw in text.splitlines() + [""]:
+    for raw in [*text.splitlines(), ""]:
         line = raw.strip("﻿").strip()
         if current is not None and not line:
             entries.append(TranscriptEntry(current[0], current[1], " ".join(chunks)))
@@ -74,11 +74,17 @@ def parse_srt(text: str) -> tuple[TranscriptEntry, ...]:
 
 @app.command()
 def main(
-    recording: Annotated[Path, typer.Argument(exists=True, dir_okay=False, help="Recorded .vbs from SAP GUI's recorder.")],
+    recording: Annotated[
+        Path, typer.Argument(exists=True, dir_okay=False, help="Recorded .vbs from SAP GUI's recorder.")
+    ],
     monitor_log: Annotated[Path, typer.Argument(exists=True, dir_okay=False, help="JSONL from sapsucker-monitor.")],
-    transcript: Annotated[Path | None, typer.Option("--transcript", "-t", help="Optional narration transcript (SRT).")] = None,
+    transcript: Annotated[
+        Path | None, typer.Option("--transcript", "-t", help="Optional narration transcript (SRT).")
+    ] = None,
     out: Annotated[Path, typer.Option("--out", "-o", help="JSONL timeline output path.")] = Path("timeline.jsonl"),
-    markdown: Annotated[Path | None, typer.Option("--markdown", "-m", help="Also write a human-readable markdown timeline.")] = None,
+    markdown: Annotated[
+        Path | None, typer.Option("--markdown", "-m", help="Also write a human-readable markdown timeline.")
+    ] = None,
 ) -> None:
     """Correlate a recording with its monitor log into one timestamped timeline."""
     rec = Recording.load(recording)

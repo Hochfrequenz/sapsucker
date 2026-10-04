@@ -218,6 +218,26 @@ for sample in monitor.samples():      # generator: the caller owns the loop, and
 `samples()` never starts a thread. COM is STA, so a monitor loop occupies its
 thread for its whole lifetime — see the `sapsucker.monitor` module docstring.
 
+## Correlating a recording with its log
+
+`sapsucker-correlate` joins a recorded `.vbs`, the monitor JSONL made while it was
+recorded and (optionally) an SRT narration transcript into one timestamped timeline.
+
+```bash
+sapsucker-correlate journey3.vbs timing.jsonl -m timeline.md
+```
+
+`-o` sets the JSONL output (default `timeline.jsonl`), `-t` attaches an SRT transcript.
+Each recorded statement is timestamped by the first strategy that fits, and the strategy
+is reported per step: `exact-focus`, `ddic-suffix`, `watch-run`, `modal-bracket`,
+`fingerprint-screen`, `fingerprint-title`, `recorder-boilerplate`, or `unmatched`.
+A log without a `--record` header has no measured clock offset, so alignment is assumed
+and flagged.
+
+The matcher is heuristic. A prototype timestamped most statements of one real
+recording/log pair; that is a single pair, not an accuracy figure, so read the
+timeline (especially the `flags` column) before relying on it.
+
 ## Architecture
 
 sapsucker wraps the SAP GUI Scripting COM API as a hierarchy of typed Python classes:
