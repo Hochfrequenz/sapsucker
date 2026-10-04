@@ -34,6 +34,7 @@ cli = [
 
 [project.scripts]
 sapsucker-monitor = "sapsucker._monitor_entry:main"
+sapsucker-correlate = "sapsucker._correlate_entry:main"
 
 [project.urls]
 Changelog = "https://github.com/Hochfrequenz/sapsucker/releases"
