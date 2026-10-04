@@ -111,13 +111,21 @@ def main(
 
     timeline = correlate(rec, log, transcript=entries)
 
-    out.write_text(timeline.to_jsonl(), encoding="utf-8")
+    try:
+        out.write_text(timeline.to_jsonl(), encoding="utf-8")
+    except OSError as exc:
+        typer.secho(f"cannot write --out: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
     typer.echo(
         f"{len(timeline.steps)} step(s) -> {out}   "
         + " ".join(f"{n} {k}" for k, n in sorted(timeline.strategy_counts.items()))
     )
     if markdown is not None:
-        markdown.write_text(timeline.to_markdown(), encoding="utf-8")
+        try:
+            markdown.write_text(timeline.to_markdown(), encoding="utf-8")
+        except OSError as exc:
+            typer.secho(f"cannot write --markdown: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=2) from exc
         typer.echo(f"markdown -> {markdown}")
     unmatched = timeline.strategy_counts.get("unmatched", 0)
     if unmatched:
