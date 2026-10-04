@@ -306,7 +306,17 @@ def _modal_bracket_for(
         return None
     prefix = f"wnd[{m.group(1)}]"
     cached = used.get(prefix)
-    if cached is not None and cached.open_idx >= cursor:
+    if (
+        cached is not None
+        and cached.open_idx >= cursor
+        # Shareable only while no *later* bracket exists for the same window:
+        # a step after the modal closed (and after the next modal opened) needs
+        # the new bracket, not the stale one.
+        and not any(b.key == cached.key and b.open_idx > cached.open_idx for b in _modal_brackets(log))
+    ):
+        # Sibling steps inside one modal share the bracket — consecutive
+        # presses the monitor collapsed into one window are honest about the
+        # collapse (the timeline flags them, it does not invent precision).
         return cached
     for bracket in _modal_brackets(log):
         if bracket.key != f"{prefix}:Text" or bracket.open_idx < cursor:
@@ -347,8 +357,14 @@ def _watch_run_anchor(log: MonitorLog, cursor: int, step: RecordingStep) -> int 
 
 
 def _watch_key_of(element_id: str, member: str) -> str | None:
-    parts = member.split("_")
-    camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+    # Members arrive in both spellings: the recorder writes COM camelCase
+    # (firstVisibleRow), sapsucker-style snake_case (first_visible_row)
+    # normalizes to the same COM property name.
+    if "_" in member:
+        parts = member.split("_")
+        camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+    else:
+        camel = member[0].upper() + member[1:]
     return f"{element_id}:{camel}"
 
 
@@ -542,13 +558,16 @@ def correlate(
 
         # 6: screen/title fingerprints for press/sendVKey/select on wnd[0].
         if anchor is None and step.member in _SCREEN_MEMBERS and re.match(r"^wnd\[0\]", step.element_id):
-            idx = _screen_transition(log, cursor + 1)
-            if idx is not None:
-                anchor, strategy = idx, "fingerprint-screen"
-            else:
-                idx = _title_transition(log, cursor + 1)
-                if idx is not None:
-                    anchor, strategy = idx, "fingerprint-title"
+            # The FIRST subsequent observable event wins — a press's effect is
+            # whatever changes next (screen geometry, or title with focus move
+            # for #82 Finding-4 buttons); taking a later transition would skip
+            # over the steps the press precedes.
+            screen_idx = _screen_transition(log, cursor + 1)
+            title_idx = _title_transition(log, cursor + 1)
+            if screen_idx is not None and (title_idx is None or screen_idx <= title_idx):
+                anchor, strategy = screen_idx, "fingerprint-screen"
+            elif title_idx is not None:
+                anchor, strategy = title_idx, "fingerprint-title"
 
         if anchor is not None:
             sample = log.samples[anchor]

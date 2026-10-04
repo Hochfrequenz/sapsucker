@@ -15,6 +15,11 @@ from sapsucker._correlate import (
 )
 from sapsucker._recording import Recording
 
+# The real journey-6 JSONL (4134 samples) lives only on the machine that
+# recovered it from git history (commit 3581a44^:journey6_bp_timing.jsonl);
+# point SAPSUCKER_CORRELATE_J6 at it to run the cross-journey acceptance gate.
+J6 = os.environ.get("SAPSUCKER_CORRELATE_J6")
+
 
 def _log(*rows):
     """Build a MonitorLog from (elapsed, changed, values) rows (v2 flat schema)."""
@@ -125,6 +130,125 @@ class TestMatcherBasics:
         assert tl.strategy_counts["unmatched"] >= 1
 
 
+class TestModalBracket:
+    def test_two_presses_share_one_modal_window(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/tbar[0]/btn[11]").press\n'
+            'session.findById("wnd[1]/usr/btnBUTTON_1").press\n'
+            'session.findById("wnd[1]/usr/btnBUTTON_2").press\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/btn[11]", "wnd[1]:Text": "<absent>"}),
+            (2.0, ["wnd[1]:Text"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/btn[11]", "wnd[1]:Text": "Warnung"}),
+            (4.0, ["wnd[1]:Text"], {"focus_id": f"{FOCUS}/wnd[0]/usr", "wnd[1]:Text": "<absent>"}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[1].strategy == "modal-bracket"
+        assert tl.steps[1].t_start == pytest.approx(2.0)
+        assert tl.steps[1].t_end == pytest.approx(4.0)
+        # sibling press shares the same consumed bracket
+        assert tl.steps[2].strategy == "modal-bracket"
+        assert tl.steps[2].t_start == pytest.approx(2.0)
+
+    def test_two_sequential_modals_get_separate_brackets(self):
+        # Two wnd[1] dialogs at different times: each press binds to its own
+        # bracket, not the first one forever.
+        rec = Recording.parse(
+            'session.findById("wnd[1]/usr/btnA").press\n'
+            'session.findById("wnd[1]/usr/btnB").press\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+            (2.0, ["focus_id", "wnd[1]:Text"], {"wnd[1]:Text": "First", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (3.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (5.0, ["wnd[1]:Text"], {"wnd[1]:Text": "Second", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (6.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].t_start == pytest.approx(2.0)
+        assert tl.steps[0].t_end == pytest.approx(3.0)
+        assert tl.steps[1].t_start == pytest.approx(5.0)
+        assert tl.steps[1].t_end == pytest.approx(6.0)
+
+
+class TestFingerprints:
+    def test_okcd_pair_binds_to_transaction_change(self):
+        # The okcd assignment produced no focus change (the field already had
+        # focus — the keyboard-anchor case observed live), so it must bind to
+        # the transition its sendVKey causes, and the sendVKey inherits it.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/tbar[0]/okcd").text = "/nbp"\n'
+            'session.findById("wnd[0]").sendVKey 0\n'
+        )
+        log = _log(
+            (1.0, [], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd", "transaction": "SESSION_MANAGER", "screen_number": 100}),
+            (2.5, ["transaction", "program", "screen_number"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd", "transaction": "BP", "screen_number": 3000}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "fingerprint-screen"
+        assert tl.steps[0].flags == ("keyboard-anchor",)
+        assert tl.steps[0].t_start == pytest.approx(2.5)
+        # the sendVKey inherits its okcd pair's anchor
+        assert tl.steps[1].strategy == "fingerprint-screen"
+        assert tl.steps[1].t_start == pytest.approx(2.5)
+        assert tl.steps[1].flags == ("keyboard-anchor", "sub-interval-collapse")
+
+    def test_press_binds_to_title_change(self):
+        # No focus change at all (focus was already on the button): only the
+        # title fingerprint can timestamp this press.
+        rec = Recording.parse('session.findById("wnd[0]/tbar[0]/btn[11]").press\n')
+        log = _log(
+            (1.0, [], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/btn[11]", "wnd[0]:Text": "Person anlegen", "screen_number": 3000}),
+            (2.0, ["wnd[0]:Text"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/btn[11]", "wnd[0]:Text": "Person anzeigen: 3961", "screen_number": 3000}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "fingerprint-title"
+        assert tl.steps[0].t_start == pytest.approx(2.0)
+
+
+class TestWatchRun:
+    KEY = "wnd[0]/shellcont/shell:FirstVisibleRow"
+
+    def test_first_visible_row_assignments_use_watch_key(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 1\n'
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 8\n'
+        )
+        key = self.KEY
+        log = _log(
+            (1.0, [], {key: "0"}),
+            (2.0, [key], {key: "1"}),
+            (5.0, [key], {key: "8"}),
+            (6.0, [key], {key: "55"}),  # monitor caught an extra scroll
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "watch-run"
+        assert tl.steps[0].t_start == pytest.approx(2.0)
+        assert tl.steps[1].strategy == "watch-run"
+        assert tl.steps[1].t_start == pytest.approx(5.0)
+
+    def test_value_mismatch_flagged_not_failed(self):
+        rec = Recording.parse('session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 470\n')
+        key = self.KEY
+        log = _log(
+            (1.0, [], {key: "0"}),
+            (2.0, [key], {key: "144"}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "watch-run"
+        assert tl.steps[0].flags == ("value-mismatch",)
+        assert tl.steps[0].t_start == pytest.approx(2.0)
+
+    def test_exact_focus_wins_over_watch_run(self):
+        # In a real recording the focus moves to the shell before the scroll
+        # assignment, so exact-focus legitimately timestamps the first step;
+        # the watch-run key is not even in this log.
+        rec = Recording.parse('session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 8\n')
+        log = _log((1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell"}))
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "exact-focus"
+
+
 class TestLoadMonitorLog:
     def test_v2_flat_schema(self):
         lines = [
@@ -222,3 +346,28 @@ class TestLoadMonitorLog:
         )
         log = load_monitor_log([line])
         assert log.samples[0].values["wnd[0]/shellcont/shell:FirstVisibleRow"] == "0"
+
+
+@pytest.mark.skipif(
+    not J6 or not Path(J6).exists(),
+    reason="journey-6 JSONL is not committed (scratch corpus); set SAPSUCKER_CORRELATE_J6 to run locally",
+)
+class TestJourney6Acceptance:
+    """The cross-journey pairing the prototype scored 17/18 on (#126).
+
+    journey3_bp.vbs (committed) against the real journey-6 monitor log: the
+    same task family, recorded on different runs — the layout variance the
+    ddic-suffix strategy exists for.
+    """
+
+    def test_cross_journey_score(self):
+        rec = Recording.load("docs/spike/journey3_bp.vbs")
+        log = load_monitor_log(Path(J6).read_text(encoding="utf-8").splitlines())
+        tl = correlate(rec, log)
+        counts = Counter(s.strategy for s in tl.steps)
+        assert counts["exact-focus"] == 10
+        assert counts["ddic-suffix"] == 3
+        assert counts["modal-bracket"] == 2
+        assert counts["fingerprint-screen"] == 1
+        assert counts["recorder-boilerplate"] == 1
+        assert counts["unmatched"] == 0, counts
