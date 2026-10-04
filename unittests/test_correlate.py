@@ -335,6 +335,19 @@ class TestWatchRun:
         assert tl.steps[0].flags == ("value-mismatch",)
         assert tl.steps[0].t_start == pytest.approx(2.0)
 
+    @pytest.mark.parametrize(("assigned", "expect_second"), [(("8", "55"), True), (("55", "8"), False)])
+    def test_collapsed_watch_assignment_recomputes_value_mismatch(self, assigned, expect_second):
+        rec = Recording.parse(
+            "".join(f'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = {v}\n' for v in assigned)
+        )
+        key = self.KEY
+        log = _log((1.0, [], {key: "0"}), (2.0, [key], {key: "8"}))
+        tl = correlate(rec, log)
+        assert [x.strategy for x in tl.steps] == ["watch-run", "watch-run"]
+        assert ("value-mismatch" in tl.steps[0].flags) is (not expect_second)
+        assert ("value-mismatch" in tl.steps[1].flags) is expect_second
+        assert "sub-interval-collapse" in tl.steps[1].flags
+
     def test_exact_focus_wins_over_watch_run(self):
         # In a real recording the focus moves to the shell before the scroll
         # assignment, so exact-focus legitimately timestamps the first step;
@@ -866,3 +879,17 @@ class TestOpusRound:
         from sapsucker._correlate import _watch_key_of
 
         assert _watch_key_of("x", "current_cellColumn") == "x:CurrentCellColumn"
+
+    @pytest.mark.parametrize(
+        "cue",
+        [
+            "00:00:20,000 --> 00:00:10,000",
+            "00:61:00,000 --> 00:62:00,000",
+            "00:00:61,000 --> 00:00:62,000",
+        ],
+    )
+    def test_parse_srt_rejects_invalid_intervals(self, cue):
+        from sapsucker.correlate_cli import parse_srt
+
+        with pytest.raises(ValueError, match="SRT"):
+            parse_srt(f"1\n{cue}\ntext\n")

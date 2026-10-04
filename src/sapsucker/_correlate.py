@@ -616,6 +616,11 @@ def correlate(
                 # changes for — the documented collapse limit (journey-5: 6
                 # assignments, 4 change samples). The leftovers share the last
                 # observed window, flagged, rather than reading as unmatched.
+                # ``value-mismatch`` is per assignment: recompute it against the
+                # shared sample instead of inheriting the previous step's.
+                inherited = [f for f in prev_matched.flags if f != "value-mismatch"]
+                if _watch_value_of(log.samples[cursor], step) not in (None, step.args[0]):
+                    inherited.append("value-mismatch")
                 steps_out.append(
                     TimelineStep(
                         step.line_no,
@@ -626,7 +631,7 @@ def correlate(
                         "high",
                         prev_matched.t_start,
                         prev_matched.t_end,
-                        tuple(dict.fromkeys([*prev_matched.flags, "sub-interval-collapse"])),
+                        tuple(dict.fromkeys([*inherited, "sub-interval-collapse"])),
                         prev_matched.sbar_text,
                     )
                 )

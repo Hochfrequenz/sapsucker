@@ -45,7 +45,8 @@ def parse_srt(text: str) -> tuple[TranscriptEntry, ...]:
     """Parse an SRT file into normalized transcript entries.
 
     Raises:
-        ValueError: On a cue line that does not match the SRT timestamp shape.
+        ValueError: On a cue line that does not match the SRT timestamp shape,
+            has minutes or seconds of 60 or more, or ends before it starts.
     """
     entries: list[TranscriptEntry] = []
     current: tuple[float, float] | None = None
@@ -59,10 +60,13 @@ def parse_srt(text: str) -> tuple[TranscriptEntry, ...]:
         if current is None:
             m = _SRT_TIME.match(line)
             if m:
-                current = (
-                    _srt_seconds(m["h"], m["m"], m["s"], m["ms"]),
-                    _srt_seconds(m["h2"], m["m2"], m["s2"], m["ms2"]),
-                )
+                if any(int(m[g]) >= 60 for g in ("m", "s", "m2", "s2")):
+                    raise ValueError(f"SRT minutes/seconds out of range: {line!r}")
+                start = _srt_seconds(m["h"], m["m"], m["s"], m["ms"])
+                end = _srt_seconds(m["h2"], m["m2"], m["s2"], m["ms2"])
+                if end < start:
+                    raise ValueError(f"SRT cue ends before it starts: {line!r}")
+                current = (start, end)
             elif line.isdigit() or not line:
                 continue
             else:
