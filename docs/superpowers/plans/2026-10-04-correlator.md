@@ -10,7 +10,7 @@
 
 **Verified evidence this is buildable (2026-10-04):** A prototype of this matcher ran against the real journey-6 JSONL (4134 samples, recovered from git history commit `3581a44^:journey6_bp_timing.jsonl`) paired with the committed `docs/spike/journey3_bp.vbs`: **16/17 statements timestamped, 17 strategies assigned** — 10 exact-focus, 3 ddic-suffix, 2 modal-bracket, 1 fingerprint-screen, 1 fingerprint-title, only `resizeWorkingPane` labelled `recorder-boilerplate`. This reproduces the #126 prototype score (17/18 counting the boilerplate as handled). The committed `journey5_bp.vbs` × `journey5_timing.jsonl` pair exercises the watch-run strategy (`firstVisibleRow` never moves focus).
 
-**Where evidence files live during development:** `C:\Users\KleinKonstantin\AppData\Local\Temp\sapsucker-correlator\journey6_bp_timing.jsonl` (scratch, git-ignored by the repo-wide `*.jsonl` rule — do NOT commit it; the cross-journey unit tests use small synthetic fixtures instead).
+**Where evidence files live during development:** `<scratch>\journey6_bp_timing.jsonl` (scratch, git-ignored by the repo-wide `*.jsonl` rule — do NOT commit it; the cross-journey unit tests use small synthetic fixtures instead).
 
 ---
 
@@ -474,7 +474,7 @@ The real journey-6 JSONL stays in the temp scratch dir (never committed). Write 
 - [ ] **Step 1: Write the acceptance test**
 
 ```python
-J6 = Path(r"C:\Users\KleinKonstantin\AppData\Local\Temp\sapsucker-correlator\journey6_bp_timing.jsonl")
+J6 = Path(r"<scratch>\journey6_bp_timing.jsonl")
 
 @pytest.mark.skipif(not J6.exists(), reason="journey-6 JSONL recovered from git history lives only in this machine's temp dir; CI runs the synthetic suite")
 class TestJourney6Acceptance:
