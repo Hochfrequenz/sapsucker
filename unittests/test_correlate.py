@@ -1005,3 +1005,44 @@ class TestMatcherFollowUps:
         tl = correlate(rec, log)
         assert [x.t_start for x in tl.steps] == [1.0, 1.0, 2.0]
         assert "sub-interval-collapse" in tl.steps[1].flags
+
+    def test_repeat_does_not_starve_a_later_step_whose_only_event_comes_after_anothers(self):
+        # B's only remaining event (B@5) is after C's (C@4): taking A@3 for the
+        # repeat would move the cursor past C and leave it unmatched.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/usr/txtB").text = "b"\n'
+            'session.findById("wnd[0]/usr/txtC").text = "c"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 2.0, 4.0]
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+
+    def test_suffix_repeat_after_an_unmatched_step_is_recognised(self):
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "z"\n'
+            'session.findById("wnd[0]/usr/ctxtY-KUNNR").text = "2"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtQ-KUNNR"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtQ-KUNNR"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.strategy for x in tl.steps] == ["ddic-suffix", "unmatched", "ddic-suffix"]
+        assert tl.steps[2].t_start == 3.0
+
+    def test_change_listed_in_the_baseline_sample_is_not_a_watch_match(self):
+        shell = "wnd[0]/shellcont/shell"
+        key = f"{shell}:FirstVisibleRow"
+        rec = Recording.parse(f'session.findById("{shell}").firstVisibleRow = 8\n')
+        log = _log((0.0, [key], {key: "8"}), (1.0, [key], {key: "8"}))
+        assert correlate(rec, log).steps[0].t_start == 1.0

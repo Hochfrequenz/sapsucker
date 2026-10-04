@@ -34,7 +34,7 @@ import json
 import re
 from bisect import bisect_left, bisect_right
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -333,7 +333,7 @@ def _focus_on_suffix(suffix: str | None) -> Callable[[MonitorSample], bool]:
 
 
 def _is_repeat_anchor(prev: TimelineStep | None, segment: str, suffix: str | None = None) -> bool:
-    """True when the previous *matched* step (boilerplate rows excluded) was an
+    """True when the previous *matched* step (unmatched and boilerplate rows excluded) was an
     exact-focus or ddic-suffix match on the same field (or, for a suffix match,
     a field with the same DDIC suffix) — i.e. this step would silently share its
     anchor."""
@@ -398,6 +398,52 @@ class _FocusIndex:
         return len(events) - bisect_right(events, idx)
 
 
+def _next_event(focus: _FocusIndex, seg: str, cursor: int, previous_seg: str | None) -> int | None:
+    """The sample the greedy matcher would give a step on *seg* from *cursor*.
+
+    Mirrors the matcher: the field's own focus changes, or its DDIC suffix's when
+    the log never shows the exact field (layout shift). A step directly after a
+    step on the same field prefers a strictly later event over sharing *cursor*.
+    """
+    events = focus.by_segment.get(seg)
+    if not events:
+        sfx = _ddic_suffix(seg)
+        events = focus.by_suffix.get(sfx, []) if sfx is not None else []
+    pos = bisect_left(events, cursor)
+    if pos >= len(events):
+        return None
+    if seg == previous_seg and events[pos] == cursor and pos + 1 < len(events):
+        return events[pos + 1]
+    return events[pos]
+
+
+def _leaves_more_unmatched(
+    focus: _FocusIndex, idx: int, target: int, segment: str, remaining: Sequence[str], start: int
+) -> bool:
+    """Whether taking *target* instead of collapsing onto *idx* starves a later step.
+
+    Replays the remaining event-consuming steps (``remaining[start:]``) greedily
+    from both candidate cursors, in recording order, and counts the steps that
+    find no event. Both replays are identical once their cursors meet, so the
+    walk stops there.
+    """
+    cursors = [idx, target]
+    unmatched = [0, 0]
+    previous: str | None = segment
+    for k in range(start, len(remaining)):
+        seg = remaining[k]
+        for which in (0, 1):
+            nxt = _next_event(focus, seg, cursors[which], previous)
+            if nxt is None:
+                unmatched[which] += 1
+            else:
+                cursors[which] = nxt
+        previous = seg
+        if cursors[0] == cursors[1]:
+            break
+    return unmatched[1] > unmatched[0]
+
+
 def _later_unclaimed_focus(
     focus: _FocusIndex,
     idx: int,
@@ -405,6 +451,8 @@ def _later_unclaimed_focus(
     suffix: str | None,
     later_segments: Counter[str],
     later_suffixes: Counter[str],
+    remaining: Sequence[str],
+    start: int,
 ) -> int | None:
     """A later focus change for a repeated edit, or None to collapse.
 
@@ -413,12 +461,11 @@ def _later_unclaimed_focus(
     *later recorded step*. The target (the next change of this field after
     *idx*; matched by DDIC *suffix* when one is given) is refused when
 
-    * later steps on the same field would be left without an event, or
+    * later steps on the same field would be left without an event (a count), or
     * a field visited between *idx* and the target is edited by a later step
-      and would have fewer events left after the target than later steps need.
-
-    Both checks count events, so a visited field that is also edited later
-    does not block the jump while the log still holds enough events for it.
+      and replaying the later steps from the target leaves more of them
+      unmatched than replaying them from *idx* (order-aware; only run when such
+      a visited field exists, so plain repeats stay cheap).
     """
     if suffix is not None:
         events = focus.by_suffix.get(suffix, [])
@@ -432,17 +479,11 @@ def _later_unclaimed_focus(
     lo = bisect_right(focus.all_idx, idx)
     hi = bisect_left(focus.all_idx, target)
     for seg in set(focus.segment_at[lo:hi]):
-        need_exact = later_segments[seg]
-        if need_exact:
-            if focus.after(focus.by_segment[seg], target) < need_exact:
-                return None
-            continue
         sfx = _ddic_suffix(seg)
-        if sfx is None:
-            continue
-        need_sfx = later_suffixes[sfx]
-        if need_sfx and focus.after(focus.by_suffix[sfx], target) < need_sfx:
-            return None
+        if later_segments[seg] or (sfx is not None and later_suffixes[sfx]):
+            if _leaves_more_unmatched(focus, idx, target, segment, remaining, start):
+                return None
+            break
     return target
 
 
@@ -637,9 +678,12 @@ def correlate(
     # is removed from the counters at the top of its iteration.
     later_segments: Counter[str] = Counter()
     later_suffixes: Counter[str] = Counter()
+    consuming: list[str] = []  # segments of the event-consuming steps, in order
+    consumed_so_far = 0
     for other in recording.steps:
         if _consumes_event(other):
             seg = _last_segment(other.element_id)
+            consuming.append(seg)
             later_segments[seg] += 1
             if (sfx := _ddic_suffix(seg)) is not None:
                 later_suffixes[sfx] += 1
@@ -648,6 +692,7 @@ def correlate(
     for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
         if _consumes_event(step):
+            consumed_so_far += 1
             later_segments[segment] -= 1
             if (own_sfx := _ddic_suffix(segment)) is not None:
                 later_suffixes[own_sfx] -= 1
@@ -730,8 +775,9 @@ def correlate(
                 if _watch_value_of(sample, step) not in (None, step.args[0]):
                     flags.append("value-mismatch")
                 if idx == cursor and _last_matched(steps_out) is not None:
-                    # A different watched property that changed in the sample the
-                    # previous step already took: one observed instant, two steps.
+                    # Another step already took this sample (typically a different
+                    # watched property that changed in the same sample): one
+                    # observed instant, two steps.
                     flags.append("sub-interval-collapse")
 
         # 2: exact focus match
@@ -742,7 +788,9 @@ def correlate(
                 # previous step already took: look for a *later* occurrence before
                 # accepting the shared anchor (two edits of one field bind to two
                 # focus changes when the log has both).
-                later = _later_unclaimed_focus(focus_index, idx, segment, None, later_segments, later_suffixes)
+                later = _later_unclaimed_focus(
+                    focus_index, idx, segment, None, later_segments, later_suffixes, consuming, consumed_so_far
+                )
                 if later is not None:
                     idx = later
                 else:
@@ -755,7 +803,9 @@ def correlate(
             suffix = _ddic_suffix(segment)
             idx = _scan(log, cursor, _focus_on_suffix(suffix))
             if idx is not None and _is_repeat_anchor(_last_matched(steps_out), segment, suffix):
-                later = _later_unclaimed_focus(focus_index, idx, segment, suffix, later_segments, later_suffixes)
+                later = _later_unclaimed_focus(
+                    focus_index, idx, segment, suffix, later_segments, later_suffixes, consuming, consumed_so_far
+                )
                 if later is not None:
                     idx = later
                 else:
