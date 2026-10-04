@@ -1,0 +1,388 @@
+"""Correlate a recorded ``.vbs`` with a monitor JSONL and an optional transcript.
+
+Phase 5 of the recording→artefact plan (``docs/superpowers/specs/2026-10-03-
+recording-to-skill-pipeline-design.md``), issue #126. A recording says *what*
+was done but carries no timestamps; the monitor JSONL says *when*, plus the
+sampled screen/focus/status-bar state; an optional narration transcript says
+*why*. This module joins the three into one merged timeline: for every recorded
+step, the timestamp window in which its observable counterpart moved, the
+status-bar text in that window, and the transcript excerpts falling inside it.
+
+The matcher walks the recorded steps in order and timestamps each by the first
+strategy that fits (see :func:`correlate`). One monotonic cursor over sample
+indices keeps steps from matching backwards: a later step can share an
+earlier step's anchor (sub-interval actions collapse — the known sampling
+limit, flagged as such) but never lands before it.
+
+Pure library code: no COM involved, everything here is testable in CI against
+synthetic logs and the committed corpus in ``docs/spike/``.
+
+Example::
+
+    from sapsucker._correlate import correlate, load_monitor_log
+    from sapsucker._recording import Recording
+
+    rec = Recording.load("docs/spike/journey3_bp.vbs")
+    log = load_monitor_log(open("timing.jsonl", encoding="utf-8"))
+    timeline = correlate(rec, log)
+    print(timeline.to_markdown())
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections import Counter
+from dataclasses import dataclass, field
+
+from sapsucker._recording import Recording, RecordingStep
+
+__all__ = [
+    "CorrelatedTimeline",
+    "MonitorLog",
+    "MonitorSample",
+    "TranscriptEntry",
+    "TimelineStep",
+    "correlate",
+    "load_monitor_log",
+]
+
+_UNPACKED_KEYS = frozenset(
+    {
+        "schema_version",
+        "seq",
+        "at",
+        "elapsed",
+        "elapsed_s",
+        "changed",
+        "gap_since_change",
+        "gap_since_change_s",
+        "record_type",
+        "origin_at",
+        "recording_file",
+        "recorder_skew",
+    }
+)
+_ISO_DURATION = re.compile(r"^PT(?:(\d+)H)?(?:(\d+(?:\.\d+)?)M)?(\d+(?:\.\d+)?)S$")
+_UNREADABLE = "<unreadable>"
+_ABSENT = "<absent>"
+_SENTINELS = frozenset({_UNREADABLE, _ABSENT})
+
+
+@dataclass(frozen=True)
+class MonitorSample:
+    """One flattened JSONL sample, normalized across the two schema generations."""
+
+    seq: int
+    #: Seconds since the sampler origin (already parsed from ``elapsed_s`` or
+    #: the ISO-8601 duration ``elapsed``).
+    elapsed: float
+    changed: frozenset[str]
+    values: dict
+
+
+@dataclass(frozen=True)
+class MonitorLog:
+    samples: list[MonitorSample]
+    #: ``--record`` logs open with a header record carrying the measured skew
+    #: between the sampler origin and the recorder start.
+    recorder_skew: float | None = None
+    #: True for a v2 log (no header): correlating it against a recording
+    #: assumes both started together, which the manual pairing procedure
+    #: (start monitor, start recorder by hand) makes approximate.
+    clock_origin_assumed: bool = True
+
+
+def _parse_elapsed(d: dict, line_no: int) -> float:
+    if "elapsed_s" in d:
+        return float(d["elapsed_s"])
+    raw = d.get("elapsed")
+    m = _ISO_DURATION.match(raw) if isinstance(raw, str) else None
+    if not m:
+        raise ValueError(f"line {line_no}: sample {d.get('seq')}: no usable elapsed field ({raw!r})")
+    hours, minutes, seconds = m.groups()
+    return int(hours or 0) * 3600 + float(minutes or 0) * 60 + float(seconds or 0)
+
+
+def load_monitor_log(lines: list[str]) -> MonitorLog:
+    """Parse monitor JSONL lines (schema v2 flat, or v3+ with a header record).
+
+    Raises:
+        ValueError: If a line is not JSON, not an object, or a sample has no
+            usable elapsed field; or if the log holds no samples at all.
+    """
+    samples: list[MonitorSample] = []
+    recorder_skew: float | None = None
+    for line_no, raw in enumerate(lines, 1):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            d = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"line {line_no}: not JSON: {raw[:80]!r}") from exc
+        if not isinstance(d, dict):
+            raise ValueError(f"line {line_no}: expected a JSON object, got {type(d).__name__}")
+        if d.get("record_type") == "header":
+            skew = d.get("recorder_skew")
+            recorder_skew = float(skew) if skew is not None else None
+            continue
+        samples.append(
+            MonitorSample(
+                seq=int(d.get("seq", len(samples))),
+                elapsed=_parse_elapsed(d, line_no),
+                changed=frozenset(d.get("changed") or ()),
+                values={k: v for k, v in d.items() if k not in _UNPACKED_KEYS},
+            )
+        )
+    if not samples:
+        raise ValueError("no samples in monitor log")
+    return MonitorLog(
+        samples=samples, recorder_skew=recorder_skew, clock_origin_assumed=recorder_skew is None
+    )
+
+
+@dataclass(frozen=True)
+class TranscriptEntry:
+    """A normalized narration entry: text spoken between two timeline points."""
+
+    t_start: float
+    t_end: float
+    text: str
+
+
+@dataclass(frozen=True)
+class TimelineStep:
+    """One recorded step with its matched window in the monitor log."""
+
+    line_no: int
+    element_id: str
+    member: str
+    args: tuple[str, ...] | None
+    #: Which strategy timestamped this step — ``exact-focus``, ``ddic-suffix``,
+    #: ``watch-run``, ``modal-bracket``, ``fingerprint-screen``,
+    #: ``fingerprint-title``, ``recorder-boilerplate`` or ``unmatched``.
+    strategy: str
+    confidence: str
+    t_start: float | None = None
+    t_end: float | None = None
+    #: Authoring flags: ``layout-sensitive``, ``sub-interval-collapse``,
+    #: ``value-mismatch``, ``suffix-ambiguous``, ``clock-origin-assumed``.
+    flags: tuple[str, ...] = ()
+    #: Status-bar text in force at the matched sample (the outcome signal a
+    #: recording carries none of); None when unmatched or when the log has no
+    #: status-bar keys.
+    sbar_text: str | None = None
+    #: Transcript excerpts intersecting the matched window, verbatim.
+    transcript: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CorrelatedTimeline:
+    """The merged timeline: one entry per recorded step, plus run metadata."""
+
+    steps: list[TimelineStep]
+    recording_path: str | None = None
+    recorder_skew: float | None = None
+    clock_origin_assumed: bool = True
+    strategy_counts: dict[str, int] = field(default_factory=dict)
+
+    def to_jsonl(self) -> str:
+        """One flat JSON object per step (task 5)."""
+        raise NotImplementedError
+
+    def to_markdown(self) -> str:
+        """A human-readable merged journey document (task 5)."""
+        raise NotImplementedError
+
+
+#: Recorder boilerplate that moves no observable state — labelled, never matched.
+_BOILERPLATE_MEMBERS = frozenset({"resizeWorkingPane", "maximize"})
+#: Members that inherit the preceding matched step's window: they act on the
+#: field the previous step just filled and happen within one sampling interval.
+_COLLAPSE_MEMBERS = frozenset({"setFocus", "caretPosition"})
+#: Members whose observable effect is a screen transition rather than a focus move.
+_SCREEN_MEMBERS = frozenset({"press", "sendVKey", "select"})
+_STRATEGY_CONFIDENCE = {
+    "exact-focus": "high",
+    "ddic-suffix": "medium",
+    "watch-run": "high",
+    "modal-bracket": "medium",
+    "fingerprint-screen": "medium",
+    "fingerprint-title": "medium",
+    "recorder-boilerplate": "high",
+    "unmatched": "low",
+}
+
+
+def _last_segment(element_id: str) -> str:
+    return element_id.rsplit("/", 1)[-1]
+
+
+def _ddic_suffix(segment: str) -> str | None:
+    """The DDIC field name after the last ``-`` (``…-TEL_NUMBER`` → ``TEL_NUMBER``)."""
+    return segment.rsplit("-", 1)[-1] if "-" in segment else None
+
+
+def _scan(log: MonitorLog, start: int, pred) -> int | None:
+    """First sample index >= start satisfying pred, else None."""
+    for i in range(start, len(log.samples)):
+        if pred(log.samples[i]):
+            return i
+    return None
+
+
+def _focus_changed_to(sample: MonitorSample, pred) -> bool:
+    if "focus_id" not in sample.changed:
+        return False
+    focus = sample.values.get("focus_id")
+    if not isinstance(focus, str) or focus in _SENTINELS:
+        return False
+    return pred(_last_segment(focus))
+
+
+def _sbar_at(log: MonitorLog, anchor: int) -> str | None:
+    """The status-bar text in force at *anchor*: the last change of any
+    ``sbar_text`` key at or before it, skipping sentinel values. None when the
+    log has no status-bar keys or nothing was ever read."""
+    sbar_keys = [k for k in log.samples[0].values if k.startswith("sbar_") and k.endswith("text")]
+    for key in sbar_keys:
+        last_good = None
+        for sample in log.samples[: anchor + 1]:
+            value = sample.values.get(key)
+            if isinstance(value, str) and value not in _SENTINELS:
+                last_good = value
+        if last_good is not None:
+            return last_good
+    return None
+
+
+def _sbar_keys(log: MonitorLog) -> list[str]:
+    return sorted(k for k in log.samples[0].values if k.startswith("sbar_") and k.endswith("text"))
+
+
+def correlate(
+    recording: Recording, log: MonitorLog, transcript: tuple[TranscriptEntry, ...] = ()
+) -> CorrelatedTimeline:
+    """Join a parsed recording, a monitor log and optional transcript entries.
+
+    Every recorded step is timestamped by the first strategy that fits, in the
+    order the plan doc fixes:
+
+    1. exact focus — the recorded id's last segment equals a changed sample's
+       focus segment;
+    2. DDIC-suffix — the field name after ``-`` survives the
+       same-human-different-subtree variance, flagged ``layout-sensitive``;
+    3. modal bracketing — ``wnd[N]`` (N ≥ 1) presses get the modal's
+       open→close window from the ``wnd[N]:Text`` watch key;
+    4. screen/title fingerprints — ``press``/``sendVKey`` on ``wnd[0]`` bind to
+       the next transaction/program/screen change, or to a main-window title
+       change with stable screen geometry;
+    5. watch-run — an assignment to a watched element property (ALV scrolling,
+       which never moves focus) binds to the next change of that property's key;
+    6. boilerplate — ``resizeWorkingPane`` and friends are labelled rather
+       than matched.
+
+    Consecutive steps on the same element that cannot individually move state
+    (``setFocus``/``caretPosition``) inherit the preceding matched step's
+    window and are flagged ``sub-interval-collapse``.
+    """
+    steps_out: list[TimelineStep] = []
+    cursor = 0
+    prev_matched: TimelineStep | None = None
+
+    for step in recording.steps:
+        segment = _last_segment(step.element_id)
+        if step.member in _BOILERPLATE_MEMBERS:
+            steps_out.append(_emit(step, "recorder-boilerplate", flags=()))
+            continue
+
+        if (
+            prev_matched is not None
+            and step.member in _COLLAPSE_MEMBERS
+            and step.element_id == prev_matched.element_id
+            and prev_matched.t_start is not None
+        ):
+            steps_out.append(
+                TimelineStep(
+                    step.line_no,
+                    step.element_id,
+                    step.member,
+                    step.args,
+                    prev_matched.strategy,
+                    prev_matched.confidence,
+                    prev_matched.t_start,
+                    prev_matched.t_end,
+                    tuple(dict.fromkeys([*prev_matched.flags, "sub-interval-collapse"])),
+                    prev_matched.sbar_text,
+                    prev_matched.transcript,
+                )
+            )
+            continue
+
+        anchor: int | None = None
+        strategy: str | None = None
+        flags: list[str] = []
+
+        # 1: exact focus match
+        idx = _scan(log, cursor, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
+        if idx is not None:
+            anchor, strategy = idx, "exact-focus"
+
+        # 2: DDIC-field-suffix match
+        if anchor is None and "-" in segment:
+            suffix = _ddic_suffix(segment)
+            idx = _scan(log, cursor, lambda s: _focus_changed_to(s, lambda seg: _ddic_suffix(seg) == suffix))
+            if idx is not None:
+                anchor, strategy = idx, "ddic-suffix"
+                flags.append("layout-sensitive")
+                ambiguous = _scan(
+                    log,
+                    idx + 1,
+                    lambda s: _focus_changed_to(s, lambda seg: _ddic_suffix(seg) == suffix),
+                )
+                if ambiguous is not None:
+                    flags.append("suffix-ambiguous")
+
+        if anchor is not None:
+            sample = log.samples[anchor]
+            steps_out.append(
+                _emit(step, strategy, t_start=sample.elapsed, flags=tuple(flags), sbar=_sbar_at(log, anchor))
+            )
+            cursor = anchor
+            prev_matched = steps_out[-1]
+            continue
+
+        steps_out.append(_emit(step, "unmatched"))
+        prev_matched = steps_out[-1]
+
+    return CorrelatedTimeline(
+        steps=steps_out,
+        recording_path=recording.path,
+        recorder_skew=log.recorder_skew,
+        clock_origin_assumed=log.clock_origin_assumed,
+        strategy_counts=dict(Counter(s.strategy for s in steps_out)),
+    )
+
+
+def _emit(
+    step: RecordingStep,
+    strategy: str,
+    *,
+    t_start: float | None = None,
+    t_end: float | None = None,
+    flags: tuple[str, ...] = (),
+    sbar: str | None = None,
+) -> TimelineStep:
+    return TimelineStep(
+        line_no=step.line_no,
+        element_id=step.element_id,
+        member=step.member,
+        args=step.args,
+        strategy=strategy,
+        confidence=_STRATEGY_CONFIDENCE[strategy],
+        t_start=t_start,
+        t_end=t_end,
+        flags=flags,
+        sbar_text=sbar,
+    )
