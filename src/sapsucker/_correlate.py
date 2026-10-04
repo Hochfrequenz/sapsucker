@@ -241,6 +241,20 @@ def _focus_changed_to(sample: MonitorSample, pred) -> bool:
     return pred(_last_segment(focus))
 
 
+def _is_repeat_anchor(steps_out: list[TimelineStep], idx: int, segment: str) -> bool:
+    """True when the previous *emitted* step is an exact-focus match that took
+    sample *idx* on the same field — i.e. this step would silently share the
+    previous step's anchor."""
+    if not steps_out:
+        return False
+    prev = steps_out[-1]
+    return (
+        prev.strategy == "exact-focus"
+        and prev.t_start is not None
+        and _last_segment(prev.element_id) == segment
+    )
+
+
 def _sbar_at(log: MonitorLog, anchor: int) -> str | None:
     """The status-bar text in force at *anchor*: the last change of any
     ``sbar_text`` key at or before it, skipping sentinel values. None when the
@@ -326,6 +340,14 @@ def correlate(
 
         # 1: exact focus match
         idx = _scan(log, cursor, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
+        if idx is not None and _is_repeat_anchor(steps_out, idx, segment):
+            # A consecutive step on the same field matched the same sample the
+            # previous step already took: look for a *later* occurrence before
+            # accepting the shared anchor (two edits of one field bind to two
+            # focus changes when the log has both).
+            later = _scan(log, idx + 1, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
+            if later is not None:
+                idx = later
         if idx is not None:
             anchor, strategy = idx, "exact-focus"
 
@@ -349,6 +371,10 @@ def correlate(
             steps_out.append(
                 _emit(step, strategy, t_start=sample.elapsed, flags=tuple(flags), sbar=_sbar_at(log, anchor))
             )
+            # Monotonic cursor: a later step may share this anchor (sub-interval
+            # actions collapse) but never lands before it. Sharing is what
+            # makes two edits of one field two steps on one window; scanning
+            # from the anchor itself (not anchor + 1) is what allows that.
             cursor = anchor
             prev_matched = steps_out[-1]
             continue

@@ -26,6 +26,105 @@ def _log(*rows):
     )
 
 
+FOCUS = "/app/con[0]/ses[0]"
+
+
+class TestMatcherBasics:
+    REC = (
+        'session.findById("wnd[0]").resizeWorkingPane 152,33,false\n'
+        'session.findById("wnd[0]/tbar[0]/okcd").text = "/nse16n"\n'
+        'session.findById("wnd[0]/usr/ctxtGD-TAB").text = "T000"\n'
+        'session.findById("wnd[0]/usr/ctxtGD-TAB").setFocus\n'
+        'session.findById("wnd[0]/usr/ctxtGD-TAB").caretPosition = 4\n'
+    )
+
+    def test_exact_focus_and_boilerplate_and_collapse(self):
+        log = _log(
+            (0.0, [], {"transaction": "SESSION_MANAGER", "focus_id": f"{FOCUS}/wnd[0]/shellcont/shell"}),
+            (1.0, ["focus_id"], {"transaction": "SESSION_MANAGER", "focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd"}),
+            (2.0, ["focus_id"], {"transaction": "SE16N", "focus_id": f"{FOCUS}/wnd[0]/usr/ctxtGD-TAB"}),
+        )
+        tl = correlate(Recording.parse(self.REC), log)
+        assert tl.steps[0].strategy == "recorder-boilerplate"
+        assert tl.steps[0].t_start is None
+        assert tl.steps[1].strategy == "exact-focus"
+        assert tl.steps[1].t_start == pytest.approx(1.0)
+        assert tl.steps[2].strategy == "exact-focus"
+        assert tl.steps[2].t_start == pytest.approx(2.0)
+        # setFocus/caretPosition inherit the preceding text assignment's window
+        for s in tl.steps[3:5]:
+            assert s.strategy == "exact-focus"
+            assert s.flags == ("sub-interval-collapse",)
+            assert s.t_start == pytest.approx(2.0)
+
+    def test_steps_never_match_backwards(self):
+        # Two steps on the same field: the second must bind to the *later*
+        # sample, not re-match the first step's anchor.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (9.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].t_start == pytest.approx(1.0)
+        assert tl.steps[1].t_start == pytest.approx(9.0)
+
+    def test_ddic_suffix_flags_layout_sensitive(self):
+        rec = Recording.parse('session.findById("wnd[0]/usr/txtSZA11_0100-TEL_NUMBER").text = "x"\n')
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtOTHER"}),
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtSZA7_D0400-TEL_NUMBER"}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "ddic-suffix"
+        assert tl.steps[0].flags == ("layout-sensitive",)
+        assert tl.steps[0].confidence == "medium"
+        assert tl.steps[0].t_start == pytest.approx(1.0)
+
+    def test_unmatched_step(self):
+        rec = Recording.parse('session.findById("wnd[0]/usr/txtNOPE").text = "x"\n')
+        log = _log((0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtOTHER"}))
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "unmatched"
+        assert tl.steps[0].confidence == "low"
+        assert tl.steps[0].t_start is None
+
+    def test_step_cannot_bind_before_previous_anchor(self):
+        # The log's txtB change happens *before* txtA's; step 2 (txtB) must not
+        # reach back before step 1's anchor — the timeline stays monotonic.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtB").text = "2"\n'
+        )
+        log = _log(
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtB"}),
+            (9.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].t_start == pytest.approx(9.0)
+        assert tl.steps[1].strategy == "unmatched"
+
+    def test_baseline_sample_is_never_a_focus_match(self):
+        # changed must contain focus_id: a matching focus value in an unchanged sample is stale.
+        rec = Recording.parse('session.findById("wnd[0]/usr/txtA").text = "1"\n')
+        log = _log((0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtA"}))
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "unmatched"
+
+    def test_strategy_counts(self):
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell"}),
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd"}),
+        )
+        tl = correlate(Recording.parse(self.REC), log)
+        assert tl.strategy_counts["recorder-boilerplate"] == 1
+        assert tl.strategy_counts["unmatched"] >= 1
+
+
 class TestLoadMonitorLog:
     def test_v2_flat_schema(self):
         lines = [
