@@ -1046,3 +1046,46 @@ class TestMatcherFollowUps:
         rec = Recording.parse(f'session.findById("{shell}").firstVisibleRow = 8\n')
         log = _log((0.0, [key], {key: "8"}), (1.0, [key], {key: "8"}))
         assert correlate(rec, log).steps[0].t_start == 1.0
+
+    def test_replay_falls_back_to_suffix_events_once_exact_events_are_exhausted(self):
+        # X-KUNNR has an exact event only *before* the cursor; its match comes from
+        # the suffix event at 3.0. Taking P@4.0 for the repeat would strand it.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtP").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtP").text = "2"\n'
+            'session.findById("wnd[0]/usr/ctxtX-KUNNR").text = "k"\n'
+            'session.findById("wnd[0]/usr/txtC").text = "c"\n'
+        )
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtX-KUNNR"}),
+            (2.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtP"}),
+            (3.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtY-KUNNR"}),
+            (4.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtP"}),
+            (5.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/txtC"}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [2.0, 2.0, 3.0, 5.0]
+        assert "unmatched" not in [x.strategy for x in tl.steps]
+
+    def test_repeat_collapses_when_a_later_step_is_anchored_by_something_other_than_focus(self):
+        # The press is timestamped by a screen change the focus replay cannot see;
+        # jumping to A@3.0 would move the cursor past it and strand B.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/usr/txtA").text = "1"\n'
+            'session.findById("wnd[0]/usr/txtA").text = "2"\n'
+            'session.findById("wnd[0]/tbar[0]/btn[11]").press\n'
+            'session.findById("wnd[0]/usr/txtB").text = "b"\n'
+        )
+        a = f"{FOCUS}/wnd[0]/usr/txtA"
+        b = f"{FOCUS}/wnd[0]/usr/txtB"
+        log = _log(
+            (1.0, ["focus_id"], {"focus_id": a, "screen_number": 100}),
+            (1.5, ["screen_number"], {"focus_id": a, "screen_number": 200}),
+            (2.0, ["focus_id"], {"focus_id": b, "screen_number": 200}),
+            (3.0, ["focus_id"], {"focus_id": a, "screen_number": 200}),
+            (4.0, ["focus_id"], {"focus_id": b, "screen_number": 200}),
+            (5.0, ["screen_number"], {"focus_id": b, "screen_number": 300}),
+        )
+        tl = correlate(rec, log)
+        assert [x.t_start for x in tl.steps] == [1.0, 1.0, 1.5, 2.0]
+        assert "unmatched" not in [x.strategy for x in tl.steps]

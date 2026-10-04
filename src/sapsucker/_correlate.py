@@ -401,20 +401,27 @@ class _FocusIndex:
 def _next_event(focus: _FocusIndex, seg: str, cursor: int, previous_seg: str | None) -> int | None:
     """The sample the greedy matcher would give a step on *seg* from *cursor*.
 
-    Mirrors the matcher: the field's own focus changes, or its DDIC suffix's when
-    the log never shows the exact field (layout shift). A step directly after a
-    step on the same field prefers a strictly later event over sharing *cursor*.
+    Mirrors the matcher: the field's own focus changes first, then (when none is
+    left at or after *cursor*) its DDIC suffix's, which survives layout shifts. A
+    step directly after a step on the same field prefers a strictly later event
+    over sharing *cursor*.
     """
-    events = focus.by_segment.get(seg)
-    if not events:
-        sfx = _ddic_suffix(seg)
-        events = focus.by_suffix.get(sfx, []) if sfx is not None else []
+    events = focus.by_segment.get(seg, [])
     pos = bisect_left(events, cursor)
-    if pos >= len(events):
-        return None
-    if seg == previous_seg and events[pos] == cursor and pos + 1 < len(events):
-        return events[pos + 1]
-    return events[pos]
+    if pos < len(events):
+        if seg == previous_seg and events[pos] == cursor and pos + 1 < len(events):
+            return events[pos + 1]
+        return events[pos]
+    sfx = _ddic_suffix(seg)
+    suffix_events = focus.by_suffix.get(sfx, []) if sfx is not None else []
+    pos = bisect_left(suffix_events, cursor)
+    return suffix_events[pos] if pos < len(suffix_events) else None
+
+
+def _has_focus_events(focus: _FocusIndex, seg: str) -> bool:
+    """Whether the log holds any focus change the replay could give *seg*."""
+    sfx = _ddic_suffix(seg)
+    return bool(focus.by_segment.get(seg)) or (sfx is not None and bool(focus.by_suffix.get(sfx)))
 
 
 def _leaves_more_unmatched(
@@ -426,12 +433,19 @@ def _leaves_more_unmatched(
     from both candidate cursors, in recording order, and counts the steps that
     find no event. Both replays are identical once their cursors meet, so the
     walk stops there.
+
+    The replay only knows focus events. A later step the log holds no focus
+    event for at all (a button press, a watched scroll, a modal) is anchored by
+    other strategies the replay does not model, so it cannot be predicted: the
+    answer is then "yes" and the repeat collapses (flagged) rather than guess.
     """
     cursors = [idx, target]
     unmatched = [0, 0]
     previous: str | None = segment
     for k in range(start, len(remaining)):
         seg = remaining[k]
+        if not _has_focus_events(focus, seg):
+            return True
         for which in (0, 1):
             nxt = _next_event(focus, seg, cursors[which], previous)
             if nxt is None:
