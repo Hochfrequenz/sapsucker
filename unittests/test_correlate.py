@@ -442,3 +442,65 @@ self_REC = (
     'session.findById("wnd[0]").resizeWorkingPane 152,33,false\n'
     'session.findById("wnd[0]/tbar[0]/okcd").text = "/nse16n"\n'
 )
+
+
+class TestCli:
+    def test_cli_on_committed_pair(self, tmp_path):
+        """The committed journey-5 pair runs through the real CLI."""
+        from typer.testing import CliRunner
+
+        from sapsucker.correlate_cli import app
+
+        out = tmp_path / "timeline.jsonl"
+        md = tmp_path / "timeline.md"
+        result = CliRunner().invoke(
+            app,
+            [
+                "docs/spike/journey5_bp.vbs",
+                "docs/spike/journey5_timing.jsonl",
+                "--out",
+                str(out),
+                "--markdown",
+                str(md),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert out.exists() and out.read_text(encoding="utf-8").strip()
+        assert "watch-run" in md.read_text(encoding="utf-8")
+
+    def test_cli_missing_transcript_format_exits_2(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from sapsucker.correlate_cli import app
+
+        bad = tmp_path / "bad.srt"
+        bad.write_text("this is not an srt file\n", encoding="utf-8")
+        result = CliRunner().invoke(
+            app,
+            [
+                "docs/spike/journey5_bp.vbs",
+                "docs/spike/journey5_timing.jsonl",
+                "--transcript",
+                str(bad),
+                "--out",
+                str(tmp_path / "t.jsonl"),
+            ],
+        )
+        assert result.exit_code == 2
+
+    def test_parse_srt_round_trip(self):
+        from sapsucker.correlate_cli import parse_srt
+
+        srt = (
+            "1\n"
+            "00:00:01,500 --> 00:00:02,500\n"
+            "jetzt speichere ich\n"
+            "\n"
+            "2\n"
+            "00:00:08,000 --> 00:00:09,000\n"
+            "fertig\n"
+        )
+        entries = parse_srt(srt)
+        assert len(entries) == 2
+        assert entries[0].t_start == pytest.approx(1.5)
+        assert entries[0].text == "jetzt speichere ich"

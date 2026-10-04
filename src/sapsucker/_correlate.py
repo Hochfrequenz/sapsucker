@@ -422,7 +422,11 @@ def _watch_key_of(element_id: str, member: str) -> str | None:
 def _watch_value_of(sample: MonitorSample, step: RecordingStep) -> str | None:
     key = _watch_key_of(step.element_id, step.member)
     value = sample.values.get(key) if key else None
-    return str(value) if value is not None else None
+    # A failed read is not evidence of a mismatch — the monitor may simply
+    # have sampled mid-transition; only a real differing value counts.
+    if value is None or (isinstance(value, str) and value in _SENTINELS):
+        return None
+    return str(value)
 
 
 def _next_keyboard_step(steps: list[RecordingStep], from_idx: int) -> RecordingStep | None:
@@ -521,20 +525,61 @@ def correlate(
         strategy: str | None = None
         flags: list[str] = []
 
-        # 1: exact focus match
-        idx = _scan(log, cursor, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
-        if idx is not None and _is_repeat_anchor(steps_out, idx, segment):
-            # A consecutive step on the same field matched the same sample the
-            # previous step already took: look for a *later* occurrence before
-            # accepting the shared anchor (two edits of one field bind to two
-            # focus changes when the log has both).
-            later = _scan(log, idx + 1, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
-            if later is not None:
-                idx = later
-        if idx is not None:
-            anchor, strategy = idx, "exact-focus"
+        # 1: watch-run — an assignment to an element whose watched property key
+        # exists in the log (ALV scrolling never moves focus). Assignments try
+        # this FIRST, before the focus strategies: a per-property change is the
+        # more specific signal, and the focus move onto the element predates
+        # every assignment after the first (the journey-5 scroll run).
+        if step.args is not None and len(step.args) == 1:
+            idx = _watch_run_anchor(log, cursor, step)
+            if (
+                idx is None
+                and prev_matched is not None
+                and prev_matched.strategy == "watch-run"
+                and prev_matched.element_id == step.element_id
+                and prev_matched.member == step.member
+            ):
+                # More same-property assignments than the monitor caught
+                # changes for — the documented collapse limit (journey-5: 6
+                # assignments, 4 change samples). The leftovers share the last
+                # observed window, flagged, rather than reading as unmatched.
+                steps_out.append(
+                    TimelineStep(
+                        step.line_no,
+                        step.element_id,
+                        step.member,
+                        step.args,
+                        "watch-run",
+                        "high",
+                        prev_matched.t_start,
+                        prev_matched.t_end,
+                        tuple(dict.fromkeys([*prev_matched.flags, "sub-interval-collapse"])),
+                        prev_matched.sbar_text,
+                    )
+                )
+                prev_matched = steps_out[-1]
+                continue
+            if idx is not None:
+                sample = log.samples[idx]
+                anchor, strategy = idx, "watch-run"
+                if _watch_value_of(sample, step) not in (None, step.args[0]):
+                    flags.append("value-mismatch")
 
-        # 2: DDIC-field-suffix match
+        # 2: exact focus match
+        if anchor is None:
+            idx = _scan(log, cursor, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
+            if idx is not None and _is_repeat_anchor(steps_out, idx, segment):
+                # A consecutive step on the same field matched the same sample the
+                # previous step already took: look for a *later* occurrence before
+                # accepting the shared anchor (two edits of one field bind to two
+                # focus changes when the log has both).
+                later = _scan(log, idx + 1, lambda s: _focus_changed_to(s, lambda seg: seg == segment))
+                if later is not None:
+                    idx = later
+            if idx is not None:
+                anchor, strategy = idx, "exact-focus"
+
+        # 3: DDIC-field-suffix match
         if anchor is None and "-" in segment:
             suffix = _ddic_suffix(segment)
             idx = _scan(log, cursor, lambda s: _focus_changed_to(s, lambda seg: _ddic_suffix(seg) == suffix))
@@ -548,16 +593,6 @@ def correlate(
                 )
                 if ambiguous is not None:
                     flags.append("suffix-ambiguous")
-
-        # 3: watch-run — an assignment to an element whose watched property key
-        # exists in the log (ALV scrolling never moves focus).
-        if anchor is None and step.args is not None and len(step.args) == 1:
-            idx = _watch_run_anchor(log, cursor, step)
-            if idx is not None:
-                sample = log.samples[idx]
-                anchor, strategy = idx, "watch-run"
-                if _watch_value_of(sample, step) not in (None, step.args[0]):
-                    flags.append("value-mismatch")
 
         # 4: keyboard-anchor — an okcd assignment followed by sendVKey: typing
         # into an already-focused command line produces no focus change, so the
@@ -619,6 +654,27 @@ def correlate(
                 anchor, strategy = screen_idx, "fingerprint-screen"
             elif title_idx is not None:
                 anchor, strategy = title_idx, "fingerprint-title"
+            elif (
+                prev_matched is not None
+                and prev_matched.strategy == "fingerprint-screen"
+                and prev_matched.member == step.member
+                and prev_matched.element_id == step.element_id
+            ):
+                # Two consecutive same-element presses collapsed into one
+                # transition (journey-5's sendVKey 0 / sendVKey 8): inherit
+                # rather than report unmatched — the log genuinely holds one
+                # event for two actions, and the collapse flag says so.
+                steps_out.append(
+                    _emit(
+                        step,
+                        "fingerprint-screen",
+                        t_start=prev_matched.t_start,
+                        flags=("sub-interval-collapse",),
+                        sbar=prev_matched.sbar_text,
+                    )
+                )
+                prev_matched = steps_out[-1]
+                continue
 
         if anchor is not None:
             sample = log.samples[anchor]
