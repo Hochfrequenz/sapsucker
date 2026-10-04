@@ -87,8 +87,16 @@ def main(
     ] = None,
 ) -> None:
     """Correlate a recording with its monitor log into one timestamped timeline."""
-    rec = Recording.load(recording)
-    log = load_monitor_log(monitor_log.read_text(encoding="utf-8").splitlines())
+    try:
+        rec = Recording.load(recording)
+    except (ValueError, OSError) as exc:
+        typer.secho(f"bad recording: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+    try:
+        log = load_monitor_log(monitor_log.read_text(encoding="utf-8").splitlines())
+    except ValueError as exc:
+        typer.secho(f"bad monitor log: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
     entries: tuple[TranscriptEntry, ...] = ()
     if transcript is not None:
         try:

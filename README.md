@@ -224,13 +224,19 @@ thread for its whole lifetime — see the `sapsucker.monitor` module docstring.
 recorded and (optionally) an SRT narration transcript into one timestamped timeline.
 
 ```bash
+pip install sapsucker[cli]
+
 sapsucker-correlate journey3.vbs timing.jsonl -m timeline.md
 ```
 
-`-o` sets the JSONL output (default `timeline.jsonl`), `-t` attaches an SRT transcript.
+`-o` sets the JSONL output (default `timeline.jsonl`), `-t` attaches an SRT transcript (SRT is the only supported format). When the log has a
+`--record` header, cue times are taken as relative to the recorder start and shifted by the
+measured `recorder_skew`; that the narration starts with the recorder is an assumption.
 Each recorded statement is timestamped by the first strategy that fits, and the strategy
 is reported per step: `exact-focus`, `ddic-suffix`, `watch-run`, `modal-bracket`,
 `fingerprint-screen`, `fingerprint-title`, `recorder-boilerplate`, or `unmatched`.
+Each step also carries `flags` such as `keyboard-anchor`, `layout-sensitive`,
+`suffix-ambiguous`, `sub-interval-collapse`, `value-mismatch` and `clock-origin-assumed`.
 A log without a `--record` header has no measured clock offset, so alignment is assumed
 and flagged.
 

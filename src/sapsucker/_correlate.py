@@ -65,7 +65,7 @@ _UNPACKED_KEYS = frozenset(
         "recorder_skew",
     }
 )
-_ISO_DURATION = re.compile(r"^PT(?:(\d+)H)?(?:(\d+(?:\.\d+)?)M)?(\d+(?:\.\d+)?)S$")
+_ISO_DURATION = re.compile(r"^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$")
 _UNREADABLE = "<unreadable>"
 _ABSENT = "<absent>"
 _SENTINELS = frozenset({_UNREADABLE, _ABSENT})
@@ -100,10 +100,11 @@ def _parse_elapsed(d: dict[str, Any], line_no: int) -> float:
         return float(d["elapsed_s"])
     raw = d.get("elapsed")
     m = _ISO_DURATION.match(raw) if isinstance(raw, str) else None
-    if not m:
+    # ``P`` / ``PT`` alone match the pattern but carry no component.
+    if not m or not any(m.groups()):
         raise ValueError(f"line {line_no}: sample {d.get('seq')}: no usable elapsed field ({raw!r})")
-    hours, minutes, seconds = m.groups()
-    return int(hours or 0) * 3600 + float(minutes or 0) * 60 + float(seconds or 0)
+    days, hours, minutes, seconds = m.groups()
+    return int(days or 0) * 86400 + int(hours or 0) * 3600 + int(minutes or 0) * 60 + float(seconds or 0)
 
 
 def load_monitor_log(lines: list[str]) -> MonitorLog:
@@ -319,7 +320,6 @@ class _ModalBracket:
     key: str
     open_idx: int
     close_idx: int
-    used_by: list[int] = field(default_factory=list)
 
 
 def _modal_brackets(log: MonitorLog) -> list[_ModalBracket]:
@@ -330,7 +330,7 @@ def _modal_brackets(log: MonitorLog) -> list[_ModalBracket]:
     (the monitor's known limit) — brackets therefore span the whole
     present→absent interval, and sibling presses inside one modal share it.
     """
-    text_keys = sorted(k for k in log.samples[0].values if re.fullmatch(r"wnd\[\d+\]:Text", k))
+    text_keys = sorted({k for sample in log.samples for k in sample.values if re.fullmatch(r"wnd\[\d+\]:Text", k)})
     brackets: list[_ModalBracket] = []
     for key in text_keys:
         n = int(key[len("wnd[") : key.index("]")])
@@ -350,9 +350,9 @@ def _modal_brackets(log: MonitorLog) -> list[_ModalBracket]:
 
 
 def _modal_bracket_for(
-    log: MonitorLog, cursor: int, element_id: str, used: dict[str, _ModalBracket]
+    brackets: list[_ModalBracket], cursor: int, element_id: str, used: dict[str, _ModalBracket]
 ) -> _ModalBracket | None:
-    """The first unconsumed bracket of the step's modal window, open >= cursor.
+    """The first unconsumed bracket of the step's modal window not yet past the cursor.
 
     ``used`` maps ``wnd[N]`` to the bracket already taken for it: sibling steps
     inside one modal share the bracket (they cannot re-match a later modal),
@@ -363,20 +363,16 @@ def _modal_bracket_for(
         return None
     prefix = f"wnd[{m.group(1)}]"
     cached = used.get(prefix)
-    if (
-        cached is not None
-        and cached.open_idx >= cursor
-        # Shareable only while no *later* bracket exists for the same window:
-        # a step after the modal closed (and after the next modal opened) needs
-        # the new bracket, not the stale one.
-        and not any(b.key == cached.key and b.open_idx > cached.open_idx for b in _modal_brackets(log))
-    ):
-        # Sibling steps inside one modal share the bracket — consecutive
-        # presses the monitor collapsed into one window are honest about the
-        # collapse (the timeline flags them, it does not invent precision).
+    # Sibling steps inside one modal share its bracket for as long as the cursor
+    # has not moved past its close: a ``wnd[0]`` step matched after the modal
+    # closed pushes the cursor beyond it, and the next ``wnd[N]`` step then
+    # takes the next bracket.
+    if cached is not None and cached.close_idx >= cursor:
         return cached
-    for bracket in _modal_brackets(log):
-        if bracket.key != f"{prefix}:Text" or bracket.open_idx < cursor:
+    for bracket in brackets:
+        # A bracket still open at the cursor is usable (an earlier step typed
+        # into the dialog, and this one confirms it); only fully-past ones skip.
+        if bracket.key != f"{prefix}:Text" or bracket.close_idx < cursor:
             continue
         if any(b.key == bracket.key and b.open_idx == bracket.open_idx for b in used.values()):
             continue  # this exact bracket was consumed by an earlier modal
@@ -462,10 +458,6 @@ def _sbar_at(log: MonitorLog, anchor: int) -> str | None:
     return None
 
 
-def _sbar_keys(log: MonitorLog) -> list[str]:
-    return sorted(k for k in log.samples[0].values if k.startswith("sbar_") and k.endswith("text"))
-
-
 def correlate(
     recording: Recording, log: MonitorLog, transcript: tuple[TranscriptEntry, ...] = ()
 ) -> CorrelatedTimeline:
@@ -474,17 +466,17 @@ def correlate(
     Every recorded step is timestamped by the first strategy that fits, in the
     order the plan doc fixes:
 
-    1. exact focus — the recorded id's last segment equals a changed sample's
+    1. watch-run — an assignment to a watched element property (ALV scrolling,
+       which never moves focus) binds to the next change of that property's key;
+    2. exact focus — the recorded id's last segment equals a changed sample's
        focus segment;
-    2. DDIC-suffix — the field name after ``-`` survives the
+    3. DDIC-suffix — the field name after ``-`` survives the
        same-human-different-subtree variance, flagged ``layout-sensitive``;
-    3. modal bracketing — ``wnd[N]`` (N ≥ 1) presses get the modal's
-       open→close window from the ``wnd[N]:Text`` watch key;
-    4. screen/title fingerprints — ``press``/``sendVKey`` on ``wnd[0]`` bind to
+    4. keyboard anchor, then modal bracketing — ``wnd[N]`` (N ≥ 1) presses get
+       the modal's open→close window from the ``wnd[N]:Text`` watch key;
+    5. screen/title fingerprints — ``press``/``sendVKey`` on ``wnd[0]`` bind to
        the next transaction/program/screen change, or to a main-window title
        change with stable screen geometry;
-    5. watch-run — an assignment to a watched element property (ALV scrolling,
-       which never moves focus) binds to the next change of that property's key;
     6. boilerplate — ``resizeWorkingPane`` and friends are labelled rather
        than matched.
 
@@ -496,6 +488,7 @@ def correlate(
     cursor = 0
     prev_matched: TimelineStep | None = None
     used_modals: dict[str, _ModalBracket] = {}
+    modal_brackets = _modal_brackets(log)
 
     for i, step in enumerate(recording.steps):
         segment = _last_segment(step.element_id)
@@ -640,11 +633,10 @@ def correlate(
         # open->close window; each bracket is consumable once.
         t_end: int | None = None
         if anchor is None:
-            bracket = _modal_bracket_for(log, cursor, step.element_id, used_modals)
+            bracket = _modal_bracket_for(modal_brackets, cursor, step.element_id, used_modals)
             if bracket is not None:
-                anchor = bracket.open_idx
+                anchor = max(bracket.open_idx, cursor)
                 strategy = "modal-bracket"
-                bracket.used_by.append(step.line_no)
                 t_end = bracket.close_idx
 
         # 6: screen/title fingerprints for press/sendVKey/select on wnd[0].
@@ -706,7 +698,7 @@ def correlate(
         steps_out.append(_emit(step, "unmatched"))
         prev_matched = steps_out[-1]
 
-    steps_out = _attach_transcripts(steps_out, transcript)
+    steps_out = _attach_transcripts(steps_out, transcript, log.recorder_skew or 0.0)
 
     return CorrelatedTimeline(
         steps=steps_out,
@@ -723,11 +715,18 @@ def correlate(
 _TRANSCRIPT_SLACK = 2.0
 
 
-def _attach_transcripts(steps_out: list[TimelineStep], transcript: tuple[TranscriptEntry, ...]) -> list[TimelineStep]:
+def _attach_transcripts(
+    steps_out: list[TimelineStep], transcript: tuple[TranscriptEntry, ...], skew: float = 0.0
+) -> list[TimelineStep]:
     """Attach verbatim excerpts intersecting each step's widened window.
 
     Rebuilding the frozen dataclasses rather than mutating: the timeline is a
     value, and a caller holding a step must not see it grow an excerpt.
+
+    Step times are in sampler-origin seconds; an SRT is taken to be relative to
+    the recorder start, which a ``--record`` log measured as *skew* seconds
+    later, so cues are shifted by it. Unverified assumption: that the narration
+    recording starts together with the recorder.
     """
     if not transcript:
         return steps_out
@@ -738,7 +737,9 @@ def _attach_transcripts(steps_out: list[TimelineStep], transcript: tuple[Transcr
         else:
             lo = step.t_start - _TRANSCRIPT_SLACK
             hi = step.t_end if step.t_end is not None else step.t_start + _TRANSCRIPT_SLACK
-            excerpts = tuple(entry.text for entry in transcript if entry.t_start <= hi and entry.t_end >= lo)
+            excerpts = tuple(
+                entry.text for entry in transcript if entry.t_start + skew <= hi and entry.t_end + skew >= lo
+            )
         rebuilt.append(TimelineStep(**{**step.__dict__, "transcript": excerpts}))
     return rebuilt
 

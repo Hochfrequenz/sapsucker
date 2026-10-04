@@ -9,6 +9,7 @@ credentials, like every other integration test here.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 
@@ -80,11 +81,11 @@ class TestLiveCorrelation:
         for _ in range(10):  # tail: let the final transition land
             samples.append(next(gen))
 
-        log = load_monitor_log([__import__("json").dumps(s.as_record(), ensure_ascii=False) for s in samples])
+        log = load_monitor_log([json.dumps(s.as_record(), ensure_ascii=False) for s in samples])
         tl = correlate(journey, log)
 
         counts = tl.strategy_counts
-        # Every real step must be timestamped (live-verified 2026-10-04: the
+        # Every real step must be timestamped (passed against a live SAP GUI session on 2026-10-04: the
         # okcd pair shares one keyboard-anchor transition; GD-TAB gets
         # exact-focus; the trailing sendVKey 8 fingerprints the screen change).
         assert counts.get("unmatched", 0) == 0, f"unmatched steps: {counts}"

@@ -15,6 +15,8 @@ from sapsucker._correlate import (
 )
 from sapsucker._recording import Recording
 
+SPIKE = Path(__file__).parent.parent / "docs" / "spike"
+
 # The real journey-6 JSONL (4134 samples) lives only on the machine that
 # recovered it from git history (commit 3581a44^:journey6_bp_timing.jsonl);
 # point SAPSUCKER_CORRELATE_J6 at it to run the cross-journey acceptance gate.
@@ -148,19 +150,54 @@ class TestModalBracket:
     def test_two_sequential_modals_get_separate_brackets(self):
         # Two wnd[1] dialogs at different times: each press binds to its own
         # bracket, not the first one forever.
-        rec = Recording.parse('session.findById("wnd[1]/usr/btnA").press\nsession.findById("wnd[1]/usr/btnB").press\n')
+        # The wnd[0] step in between moves the cursor past the first modal's close.
+        rec = Recording.parse(
+            'session.findById("wnd[1]/usr/btnA").press\n'
+            'session.findById("wnd[0]/usr/txtZ").text = "x"\n'
+            'session.findById("wnd[1]/usr/btnB").press\n'
+        )
         log = _log(
             (1.0, ["focus_id"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
             (2.0, ["focus_id", "wnd[1]:Text"], {"wnd[1]:Text": "First", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
             (3.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (4.0, ["focus_id"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr/txtZ"}),
             (5.0, ["wnd[1]:Text"], {"wnd[1]:Text": "Second", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
             (6.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
         )
         tl = correlate(rec, log)
         assert tl.steps[0].t_start == pytest.approx(2.0)
         assert tl.steps[0].t_end == pytest.approx(3.0)
-        assert tl.steps[1].t_start == pytest.approx(5.0)
-        assert tl.steps[1].t_end == pytest.approx(6.0)
+        assert tl.steps[1].t_start == pytest.approx(4.0)
+        assert tl.steps[2].t_start == pytest.approx(5.0)
+        assert tl.steps[2].t_end == pytest.approx(6.0)
+
+    def test_siblings_share_first_modal_even_when_same_window_opens_again_later(self):
+        rec = Recording.parse('session.findById("wnd[1]/usr/btnA").press\nsession.findById("wnd[1]/usr/btnB").press\n')
+        log = _log(
+            (1.0, ["wnd[1]:Text"], {"wnd[1]:Text": "First", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (2.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+            (5.0, ["wnd[1]:Text"], {"wnd[1]:Text": "Second", "focus_id": f"{FOCUS}/wnd[1]/usr"}),
+            (6.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+        )
+        tl = correlate(rec, log)
+        assert [(x.t_start, x.t_end) for x in tl.steps] == [(1.0, 2.0), (1.0, 2.0)]
+
+    def test_press_after_typing_into_the_same_modal_still_matches_it(self):
+        # Typing into the dialog moves the cursor past the bracket's open sample;
+        # the confirming press must still bind to that dialog, not go unmatched.
+        rec = Recording.parse(
+            'session.findById("wnd[1]/usr/txtX").text = "1"\nsession.findById("wnd[1]/tbar[0]/btn[0]").press\n'
+        )
+        log = _log(
+            (1.0, ["wnd[1]:Text"], {"wnd[1]:Text": "Dialog", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+            (2.0, ["focus_id"], {"wnd[1]:Text": "Dialog", "focus_id": f"{FOCUS}/wnd[1]/usr/txtX"}),
+            (3.0, ["wnd[1]:Text"], {"wnd[1]:Text": "<absent>", "focus_id": f"{FOCUS}/wnd[0]/usr"}),
+        )
+        tl = correlate(rec, log)
+        assert tl.steps[0].strategy == "exact-focus"
+        assert tl.steps[1].strategy == "modal-bracket"
+        assert tl.steps[1].t_start == pytest.approx(2.0)
+        assert tl.steps[1].t_end == pytest.approx(3.0)
 
 
 class TestFingerprints:
@@ -359,6 +396,43 @@ class TestLoadMonitorLog:
         assert log.samples[0].values["wnd[0]/shellcont/shell:FirstVisibleRow"] == "0"
 
 
+class TestDurationsAndSkew:
+    @pytest.mark.parametrize(
+        ("iso", "seconds"),
+        [("PT1M", 60.0), ("PT1H", 3600.0), ("PT1H1M", 3660.0), ("P1D", 86400.0), ("P1DT1H", 90000.0), ("PT0.5S", 0.5)],
+    )
+    def test_iso_durations_pydantic_emits(self, iso, seconds):
+        line = json.dumps({"seq": 0, "elapsed": iso, "changed": []})
+        assert load_monitor_log([line]).samples[0].elapsed == pytest.approx(seconds)
+
+    @pytest.mark.parametrize("iso", ["P", "PT", "1M", "PTM"])
+    def test_iso_durations_without_a_component_are_rejected(self, iso):
+        with pytest.raises(ValueError, match="elapsed"):
+            load_monitor_log([json.dumps({"seq": 0, "elapsed": iso, "changed": []})])
+
+    def test_recorder_skew_shifts_transcript_cues(self):
+        header = json.dumps({"record_type": "header", "recorder_skew": 3.0})
+        rows = [
+            json.dumps({"seq": 0, "elapsed_s": 10.0, "changed": [], "wnd[0]:Text": "A", "screen_number": 1}),
+            json.dumps(
+                {"seq": 1, "elapsed_s": 11.0, "changed": ["wnd[0]:Text"], "wnd[0]:Text": "B", "screen_number": 1}
+            ),
+        ]
+        log = load_monitor_log([header, *rows])
+        assert log.recorder_skew == 3.0
+        rec = Recording.parse('session.findById("wnd[0]/tbar[0]/btn[11]").press\n')
+        # The press sits at 11.0 (sampler clock). A cue at 8.5s of the *recording*
+        # is 11.5s on the sampler clock and falls inside; unshifted it would be
+        # outside the +-2s window around 11.0.
+        cue = (TranscriptEntry(8.5, 8.6, "shifted"),)
+        assert correlate(rec, log, transcript=cue).steps[0].transcript == ("shifted",)
+        assert correlate(rec, load_monitor_log(rows), transcript=cue).steps[0].transcript == ()
+        # Upper bound: 10.5s of the recording is 13.5s on the sampler clock, past the
+        # window (hi = 11.0 + 2.0); unshifted it would wrongly fall inside.
+        late = (TranscriptEntry(10.5, 10.6, "late"),)
+        assert correlate(rec, log, transcript=late).steps[0].transcript == ()
+
+
 @pytest.mark.skipif(
     not J6 or not Path(J6).exists(),
     reason="journey-6 JSONL is not committed (scratch corpus); set SAPSUCKER_CORRELATE_J6 to run locally",
@@ -458,7 +532,7 @@ self_REC = (
 class TestCli:
     def test_cli_on_committed_pair(self, tmp_path):
         """The committed journey-5 pair runs through the real CLI."""
-        from typer.testing import CliRunner
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
 
         from sapsucker.correlate_cli import app
 
@@ -467,8 +541,8 @@ class TestCli:
         result = CliRunner().invoke(
             app,
             [
-                "docs/spike/journey5_bp.vbs",
-                "docs/spike/journey5_timing.jsonl",
+                str(SPIKE / "journey5_bp.vbs"),
+                str(SPIKE / "journey5_timing.jsonl"),
                 "--out",
                 str(out),
                 "--markdown",
@@ -480,7 +554,7 @@ class TestCli:
         assert "watch-run" in md.read_text(encoding="utf-8")
 
     def test_cli_missing_transcript_format_exits_2(self, tmp_path):
-        from typer.testing import CliRunner
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
 
         from sapsucker.correlate_cli import app
 
@@ -489,8 +563,8 @@ class TestCli:
         result = CliRunner().invoke(
             app,
             [
-                "docs/spike/journey5_bp.vbs",
-                "docs/spike/journey5_timing.jsonl",
+                str(SPIKE / "journey5_bp.vbs"),
+                str(SPIKE / "journey5_timing.jsonl"),
                 "--transcript",
                 str(bad),
                 "--out",
@@ -507,3 +581,24 @@ class TestCli:
         assert len(entries) == 2
         assert entries[0].t_start == pytest.approx(1.5)
         assert entries[0].text == "jetzt speichere ich"
+
+    def test_cli_bad_monitor_log_exits_2(self, tmp_path):
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
+        from sapsucker.correlate_cli import app
+
+        bad = tmp_path / "bad.jsonl"
+        bad.write_text("not json\n", encoding="utf-8")
+        result = CliRunner().invoke(app, [str(SPIKE / "journey5_bp.vbs"), str(bad), "--out", str(tmp_path / "t.jsonl")])
+        assert result.exit_code == 2
+        assert "bad monitor log" in result.output
+
+    def test_cli_bad_recording_exits_2(self, tmp_path):
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
+        from sapsucker.correlate_cli import app
+
+        bad = tmp_path / "bad.vbs"
+        bad.write_text("this is not a recording\n", encoding="utf-8")
+        result = CliRunner().invoke(
+            app, [str(bad), str(SPIKE / "journey5_timing.jsonl"), "--out", str(tmp_path / "t.jsonl")]
+        )
+        assert result.exit_code == 2, result.output
