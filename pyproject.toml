@@ -122,7 +122,7 @@ linting = [
     "ruff==0.16.9",
 ]
 type_check = [
-    "mypy==2.3.1",
+    "mypy==2.4.0",
     # typer must be present or --strict cannot check monitor_cli: an absent
     # dependency yields import-not-found plus untyped-decorator on @app.command.
     { include-group = "cli_group" },
