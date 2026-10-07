@@ -13,7 +13,7 @@ in CI rather than only against hand-built ones.
 - **Source:** `git show 3581a44^:journey6_bp_timing.jsonl` (4134 samples),
   recorded 2026-08-26, monitor v2 schema.
 - **Trim rule** (`scripts/trim_monitor_log.py`, run with `--through-seq 197`):
-  keep `seq` 0, every sample with a non-empty `changed`, and the sample just
+  keep the first sample (the baseline), every sample with a non-empty `changed`, and the sample just
   before each of those. Original `seq` and `elapsed_s` are unchanged. The
   dropped tail (seq 2685 onward) is an unrelated SE16N excursion ten minutes
   after the journey.
@@ -21,7 +21,10 @@ in CI rather than only against hand-built ones.
   same steps (strategy, `t_start`, `t_end`, flags, status-bar text) and the same
   markdown, for `journey3_bp.vbs`.
 - **Content:** element ids, window titles, screen numbers and wall-clock `at`
-  stamps. No field values.
+  stamps. No entered field values are sampled, but window titles can carry
+  data: one sample's `wnd[0]:Text` is `Person anzeigen: 3961`, the
+  business-partner number the journey created on the test system. The tests
+  assert only on the titles `Person anlegen` and `Warnung`.
 - **No status-bar data.** This log has no `sbar_*` keys (it predates #127), so
   the status-bar attribution is covered by synthetic tests only. A real run
   needs a human with SAP GUI:
@@ -38,5 +41,6 @@ in CI rather than only against hand-built ones.
   The JSONL must contain `sbar_text` with at least one non-empty value after the
   execute (`sendVKey 8`); otherwise the run is useless for this purpose.
 
-Git ignores `*.jsonl`; this file is tracked with `git add -f`, like
-`journey5_timing.jsonl`.
+Git ignores `*.jsonl`; `.gitignore` re-includes `docs/spike/*.trimmed.jsonl`,
+so this file needs no `git add -f`. `journey5_timing.jsonl` predates that rule
+and was force-added.
