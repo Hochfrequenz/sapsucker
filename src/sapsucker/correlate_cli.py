@@ -135,6 +135,15 @@ def main(
             typer.secho(f"cannot write --markdown: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=2) from exc
         typer.echo(f"markdown -> {markdown}")
+    if transcript is not None:
+        # The JSONL has no preamble; without --markdown this is the only place
+        # a reader sees the caveat (the rows carry transcript_origin_assumed).
+        typer.secho(
+            "note: transcript cues assume the narration started together with the recorder "
+            "(unverified); pass an offset-corrected SRT otherwise.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     unmatched = timeline.strategy_counts.get("unmatched", 0)
     if unmatched:
         typer.secho(

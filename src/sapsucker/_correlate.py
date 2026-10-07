@@ -19,11 +19,15 @@ synthetic logs and the committed corpus in ``docs/spike/``.
 
 Known limits (none of this has been run against a live SAP GUI):
 
-- **Transcript origin is unverified.** Cues are shifted by the measured
-  ``recorder_skew`` and so assume the narration (SRT time 0) started together with
-  the recorder. Whether a capture setup really does that cannot be established in
+- **Transcript origin is unverified.** SRT time 0 is taken to be the recorder
+  start. With a ``--record`` header, cues are shifted by its measured
+  ``recorder_skew``; without one the shift is 0.0, i.e. cues are aligned to the
+  monitor origin, which the manual pairing only approximates to the recorder
+  start. Either way this assumes the narration started together with the
+  recorder. Whether a capture setup really does that cannot be established in
   code; ``test_recorder_skew_shifts_transcript_cues`` pins only the shift
-  direction. Pass an offset-corrected SRT otherwise.
+  direction. Pass an offset-corrected SRT otherwise. Timelines built with a
+  transcript carry ``transcript_origin_assumed`` on every JSONL record.
 - **Status-bar attribution has only synthetic tests.** No committed monitor log has
   ``sbar_*`` keys (journeys 5 and 6 predate #127). The window rule — the last
   readable status-bar change between a step's anchor and the next step's anchor —
@@ -231,6 +235,9 @@ class CorrelatedTimeline:
     recorder_skew: float | None = None
     clock_origin_assumed: bool = True
     strategy_counts: dict[str, int] = field(default_factory=dict)
+    #: True when transcript entries were passed: their placement assumes the
+    #: narration (SRT time 0) started together with the recorder, unverified.
+    transcript_origin_assumed: bool = False
 
     def to_jsonl(self) -> str:
         """One flat JSON object per step — the machine-readable timeline.
@@ -238,8 +245,9 @@ class CorrelatedTimeline:
         Field names are the dataclass fields; ``args`` serializes as a list
         (JSON has no tuples) and unset times stay ``null`` rather than being
         dropped, so a consumer can distinguish "no window" from 0. The run's
-        ``recorder_skew`` and ``clock_origin_assumed`` are repeated on every
-        record so a single line is self-describing.
+        ``recorder_skew``, ``clock_origin_assumed`` and
+        ``transcript_origin_assumed`` are repeated on every record so a single
+        line is self-describing.
         """
         lines = []
         for step in self.steps:
@@ -257,6 +265,7 @@ class CorrelatedTimeline:
                 "transcript": list(step.transcript),
                 "recorder_skew": self.recorder_skew,
                 "clock_origin_assumed": self.clock_origin_assumed,
+                "transcript_origin_assumed": self.transcript_origin_assumed,
             }
             lines.append(json.dumps(d, ensure_ascii=False))
         return "\n".join(lines) + ("\n" if lines else "")
@@ -1087,6 +1096,7 @@ def correlate(
         recorder_skew=log.recorder_skew,
         clock_origin_assumed=log.clock_origin_assumed,
         strategy_counts=dict(Counter(s.strategy for s in steps_out)),
+        transcript_origin_assumed=bool(transcript),
     )
 
 

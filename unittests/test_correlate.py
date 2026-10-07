@@ -938,6 +938,23 @@ class TestRender:
         with_cue = correlate(rec, log, transcript=(TranscriptEntry(0.9, 1.1, "typing the transaction"),))
         assert "assume the narration started together with the recorder (unverified)" in with_cue.to_markdown()
         assert "unverified" not in self._tl().to_markdown()
+        # A transcript was given, but no cue lands on any step: the table shows
+        # no excerpt, so the caveat would describe nothing on the page.
+        no_hit = correlate(rec, log, transcript=(TranscriptEntry(100.0, 101.0, "long after the journey"),))
+        assert all(not s.transcript for s in no_hit.steps)
+        assert "unverified" not in no_hit.to_markdown()
+
+    def test_jsonl_marks_transcript_origin_assumed(self):
+        rec = Recording.parse(self_REC)
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell"}),
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd"}),
+        )
+        with_t = correlate(rec, log, transcript=(TranscriptEntry(100.0, 101.0, "no step here"),))
+        rows = [json.loads(line) for line in with_t.to_jsonl().splitlines()]
+        assert rows and all(r["transcript_origin_assumed"] is True for r in rows)
+        rows = [json.loads(line) for line in self._tl().to_jsonl().splitlines()]
+        assert rows and all(r["transcript_origin_assumed"] is False for r in rows)
 
 
 self_REC = (
@@ -977,7 +994,33 @@ class TestCli:
 
         result = CliRunner().invoke(app, ["--help"])
         assert result.exit_code == 0, result.output
-        assert "unverified" in " ".join(result.output.split())
+        # rich wraps the help inside a box: drop the borders, normalise whitespace.
+        text = " ".join(result.output.replace("│", " ").replace("|", " ").split())
+        assert "unverified" in text
+        assert "started together with the recorder" in text
+
+    @pytest.mark.parametrize("with_transcript", [True, False])
+    def test_cli_transcript_prints_origin_notice(self, tmp_path, with_transcript):
+        # The JSONL has no preamble, so without -m the caveat must reach the
+        # user some other way: a one-line stderr notice whenever -t is given.
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
+        from sapsucker.correlate_cli import app
+
+        srt = tmp_path / "n.srt"
+        srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nhallo\n", encoding="utf-8")
+        args = [
+            str(SPIKE / "journey5_bp.vbs"),
+            str(SPIKE / "journey5_timing.jsonl"),
+            "--out",
+            str(tmp_path / "t.jsonl"),
+        ]
+        if with_transcript:
+            args += ["--transcript", str(srt)]
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 0, result.output
+        notice = "transcript cues assume the narration started together with the recorder (unverified)"
+        assert (notice in " ".join(result.stderr.split())) is with_transcript
+        assert notice not in result.stdout
 
     def test_cli_missing_transcript_format_exits_2(self, tmp_path):
         CliRunner = pytest.importorskip("typer.testing").CliRunner
