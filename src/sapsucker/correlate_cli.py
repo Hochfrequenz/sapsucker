@@ -46,7 +46,11 @@ def parse_srt(text: str) -> tuple[TranscriptEntry, ...]:
 
     Raises:
         ValueError: On a cue line that does not match the SRT timestamp shape,
-            has minutes or seconds of 60 or more, or ends before it starts.
+            has minutes or seconds of 60 or more, or ends before it starts;
+            or if the file holds no cue at all. ``-t`` promises
+            ``transcript_origin_assumed: true`` on every record, which a
+            cue-less file would silently break (no entries reads as no
+            transcript), so it is an error rather than an empty transcript.
     """
     entries: list[TranscriptEntry] = []
     current: tuple[float, float] | None = None
@@ -73,6 +77,8 @@ def parse_srt(text: str) -> tuple[TranscriptEntry, ...]:
                 raise ValueError(f"not an SRT timestamp line: {line!r}")
         else:
             chunks.append(line)
+    if not entries:
+        raise ValueError("SRT has no cues")
     return tuple(entries)
 
 
@@ -83,7 +89,15 @@ def main(
     ],
     monitor_log: Annotated[Path, typer.Argument(exists=True, dir_okay=False, help="JSONL from sapsucker-monitor.")],
     transcript: Annotated[
-        Path | None, typer.Option("--transcript", "-t", help="Optional narration transcript (SRT).")
+        Path | None,
+        typer.Option(
+            "--transcript",
+            "-t",
+            help=(
+                "Optional narration transcript (SRT). Assumes the narration started together with the "
+                "recorder (unverified); pass an offset-corrected SRT otherwise."
+            ),
+        ),
     ] = None,
     out: Annotated[Path, typer.Option("--out", "-o", help="JSONL timeline output path.")] = Path("timeline.jsonl"),
     markdown: Annotated[
@@ -127,6 +141,15 @@ def main(
             typer.secho(f"cannot write --markdown: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=2) from exc
         typer.echo(f"markdown -> {markdown}")
+    if transcript is not None:
+        # The JSONL has no preamble; without --markdown this is the only place
+        # a reader sees the caveat (the rows carry transcript_origin_assumed).
+        typer.secho(
+            "note: transcript cues assume the narration started together with the recorder "
+            "(unverified); pass an offset-corrected SRT otherwise.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     unmatched = timeline.strategy_counts.get("unmatched", 0)
     if unmatched:
         typer.secho(

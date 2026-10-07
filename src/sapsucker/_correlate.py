@@ -17,6 +17,30 @@ limit, flagged as such) but never lands before it.
 Pure library code: no COM involved, everything here is testable in CI against
 synthetic logs and the committed corpus in ``docs/spike/``.
 
+Known limits (none of this has been run against a live SAP GUI):
+
+- **Transcript origin is unverified.** SRT time 0 is taken to be the recorder
+  start. With a ``--record`` header, cues are shifted by its measured
+  ``recorder_skew``; without one the shift is 0.0, i.e. cues are aligned to the
+  monitor origin, which the manual pairing only approximates to the recorder
+  start. Either way this assumes the narration started together with the
+  recorder. Whether a capture setup really does that cannot be established in
+  code; ``test_recorder_skew_shifts_transcript_cues`` pins only the shift
+  direction. Pass an offset-corrected SRT otherwise. Timelines built with a
+  transcript carry ``transcript_origin_assumed`` on every JSONL record.
+- **Status-bar attribution has only synthetic tests.** No committed monitor log has
+  ``sbar_*`` keys (journeys 5 and 6 predate #127). The window rule — the last
+  readable status-bar change between a step's anchor and the next step's anchor —
+  is exercised by hand-built logs only. To record a real run, see
+  ``docs/spike/README.md`` (copy-paste command and what counts as a failed run).
+- **System messages in a step's window are attributed to that step** and not
+  flagged.
+- **A watch assignment whose value equals the current one** leaves no change in the
+  log and stays ``unmatched``.
+- **``fingerprint-screen`` vs ``fingerprint-title`` cannot be told apart on a
+  tie:** the two sample indices never coincide in the data, so ``<`` and ``<=``
+  behave the same (#133).
+
 Example::
 
     from sapsucker._correlate import correlate, load_monitor_log
@@ -211,6 +235,9 @@ class CorrelatedTimeline:
     recorder_skew: float | None = None
     clock_origin_assumed: bool = True
     strategy_counts: dict[str, int] = field(default_factory=dict)
+    #: True when transcript entries were passed: their placement assumes the
+    #: narration (SRT time 0) started together with the recorder, unverified.
+    transcript_origin_assumed: bool = False
 
     def to_jsonl(self) -> str:
         """One flat JSON object per step — the machine-readable timeline.
@@ -218,8 +245,9 @@ class CorrelatedTimeline:
         Field names are the dataclass fields; ``args`` serializes as a list
         (JSON has no tuples) and unset times stay ``null`` rather than being
         dropped, so a consumer can distinguish "no window" from 0. The run's
-        ``recorder_skew`` and ``clock_origin_assumed`` are repeated on every
-        record so a single line is self-describing.
+        ``recorder_skew``, ``clock_origin_assumed`` and
+        ``transcript_origin_assumed`` are repeated on every record so a single
+        line is self-describing.
         """
         lines = []
         for step in self.steps:
@@ -237,6 +265,7 @@ class CorrelatedTimeline:
                 "transcript": list(step.transcript),
                 "recorder_skew": self.recorder_skew,
                 "clock_origin_assumed": self.clock_origin_assumed,
+                "transcript_origin_assumed": self.transcript_origin_assumed,
             }
             lines.append(json.dumps(d, ensure_ascii=False))
         return "\n".join(lines) + ("\n" if lines else "")
@@ -259,6 +288,11 @@ class CorrelatedTimeline:
             out.append(
                 "Clock alignment: **assumed** — this log has no `--record` header, so monitor origin ≈ "
                 "recording start (manual pairing). Timestamps carry that skew."
+            )
+        if any(step.transcript for step in self.steps):
+            out.append(
+                "Transcript: cues assume the narration started together with the recorder (unverified); "
+                "pass an offset-corrected SRT otherwise."
             )
         counts = ", ".join(f"{n} {name}" for name, n in sorted(self.strategy_counts.items()))
         out.append(f"Steps: {counts}.")
@@ -1062,6 +1096,7 @@ def correlate(
         recorder_skew=log.recorder_skew,
         clock_origin_assumed=log.clock_origin_assumed,
         strategy_counts=dict(Counter(s.strategy for s in steps_out)),
+        transcript_origin_assumed=bool(transcript),
     )
 
 
