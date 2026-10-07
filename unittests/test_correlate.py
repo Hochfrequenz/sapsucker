@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -994,8 +995,10 @@ class TestCli:
 
         result = CliRunner().invoke(app, ["--help"])
         assert result.exit_code == 0, result.output
-        # rich wraps the help inside a box: drop the borders, normalise whitespace.
-        text = " ".join(result.output.replace("│", " ").replace("|", " ").split())
+        # rich wraps the help inside a box and, on CI, colours it: drop ANSI
+        # escapes and the borders, normalise whitespace.
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        text = " ".join(plain.replace("│", " ").replace("|", " ").split())
         assert "unverified" in text
         assert "started together with the recorder" in text
 
