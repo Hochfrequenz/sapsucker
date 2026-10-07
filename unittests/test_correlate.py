@@ -348,6 +348,84 @@ class TestWatchRun:
         assert ("value-mismatch" in tl.steps[1].flags) is expect_second
         assert "sub-interval-collapse" in tl.steps[1].flags
 
+    CCR = "wnd[0]/shellcont/shell:CurrentCellRow"
+    REC_FVR_CCR_FVR = (
+        'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 8\n'
+        'session.findById("wnd[0]/shellcont/shell").currentCellRow = 3\n'
+        'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 16\n'
+    )
+
+    def test_leftover_collapse_through_other_watch_key(self):
+        # #131 item 2: one sample changed both properties, the recording has
+        # two FirstVisibleRow assignments around a CurrentCellRow one. The
+        # third step's leftover must collapse onto FirstVisibleRow's last
+        # observed change although the *previous row* is the CurrentCellRow one.
+        fvr, ccr = self.KEY, self.CCR
+        log = _log(
+            (0.0, [], {fvr: "0", ccr: "0"}),
+            (1.0, [fvr, ccr], {fvr: "8", ccr: "3"}),
+        )
+        tl = correlate(Recording.parse(self.REC_FVR_CCR_FVR), log)
+        assert [s.strategy for s in tl.steps] == ["watch-run"] * 3
+        assert [s.t_start for s in tl.steps] == [pytest.approx(1.0)] * 3
+        assert "sub-interval-collapse" not in tl.steps[0].flags
+        assert "sub-interval-collapse" in tl.steps[1].flags
+        assert "sub-interval-collapse" in tl.steps[2].flags
+        assert tl.strategy_counts == {"watch-run": 3}
+
+    def test_leftover_not_collapsed_after_cursor_moved(self):
+        # CurrentCellRow changed in a *later* sample than FirstVisibleRow, so
+        # the missed third change happened after that: collapsing onto t=1.0
+        # would timestamp it before an action known to be earlier.
+        fvr, ccr = self.KEY, self.CCR
+        log = _log(
+            (0.0, [], {fvr: "0", ccr: "0"}),
+            (1.0, [fvr], {fvr: "8", ccr: "0"}),
+            (2.0, [ccr], {fvr: "8", ccr: "3"}),
+        )
+        tl = correlate(Recording.parse(self.REC_FVR_CCR_FVR), log)
+        assert [s.strategy for s in tl.steps] == ["watch-run", "watch-run", "unmatched"]
+        assert [s.t_start for s in tl.steps[:2]] == [pytest.approx(1.0), pytest.approx(2.0)]
+        assert tl.steps[2].t_start is None
+
+    @pytest.mark.parametrize(("third", "expect_mismatch"), [("16", True), ("8", False)])
+    def test_leftover_value_mismatch_recomputed_through_other_watch_key(self, third, expect_mismatch):
+        # ``value-mismatch`` is recomputed for the leftover row rather than
+        # inherited from the row it collapses onto. Which sample it is computed
+        # against is not observable here: the cursor guard makes the shared
+        # sample and the cursor sample the same one.
+        fvr, ccr = self.KEY, self.CCR
+        rec = Recording.parse(
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 8\n'
+            'session.findById("wnd[0]/shellcont/shell").currentCellRow = 3\n'
+            f'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = {third}\n'
+        )
+        log = _log(
+            (0.0, [], {fvr: "0", ccr: "0"}),
+            (1.0, [fvr, ccr], {fvr: "8", ccr: "3"}),
+        )
+        tl = correlate(rec, log)
+        assert [s.strategy for s in tl.steps] == ["watch-run"] * 3
+        assert "value-mismatch" not in tl.steps[0].flags
+        assert ("value-mismatch" in tl.steps[2].flags) is expect_mismatch
+
+    def test_leftover_not_collapsed_across_unmatched_step(self):
+        # An unmatched press between the two FirstVisibleRow assignments
+        # happened after the first one; collapsing the third step onto t=1.0
+        # would timestamp it before an action known to be earlier.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 8\n'
+            'session.findById("wnd[0]/tbar[1]/btn[8]").press\n'
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 16\n'
+        )
+        log = _log(
+            (0.0, [], {self.KEY: "0"}),
+            (1.0, [self.KEY], {self.KEY: "8"}),
+        )
+        tl = correlate(rec, log)
+        assert [s.strategy for s in tl.steps] == ["watch-run", "unmatched", "unmatched"]
+        assert tl.steps[2].t_start is None
+
     def test_exact_focus_wins_over_watch_run(self):
         # In a real recording the focus moves to the shell before the scroll
         # assignment, so exact-focus legitimately timestamps the first step;
@@ -520,14 +598,224 @@ class TestJourney6Acceptance:
 
 
 class TestSbarAndTranscript:
-    def test_sbar_text_attached_at_anchor(self):
-        rec = Recording.parse('session.findById("wnd[0]/usr/ctxtGD-TAB").text = "T000"\n')
+    A = f"{FOCUS}/wnd[0]/usr/ctxtGD-TAB"
+    B = f"{FOCUS}/wnd[0]/usr/ctxtGD-MAX_LINES"
+    REC_A = 'session.findById("wnd[0]/usr/ctxtGD-TAB").text = "T000"\n'
+    REC_AB = REC_A + 'session.findById("wnd[0]/usr/ctxtGD-MAX_LINES").text = "500"\n'
+
+    def test_sbar_message_after_anchor_belongs_to_this_step(self):
+        # SAP writes the message *after* processing the step, so it lands one or
+        # more samples after the step's anchor — and still belongs to that step.
         log = _log(
-            (0.5, ["sbar_text"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtGD-TAB", "sbar_text": "4 Einträge gefunden"}),
-            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtGD-TAB", "sbar_text": "4 Einträge gefunden"}),
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "A caused this"}),
+            (3.0, ["focus_id"], {"focus_id": self.B, "sbar_text": "A caused this"}),
+            (4.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "B caused this"}),
+        )
+        tl = correlate(Recording.parse(self.REC_AB), log)
+        assert [s.strategy for s in tl.steps] == ["exact-focus", "exact-focus"]
+        assert tl.steps[0].sbar_text == "A caused this"
+        assert tl.steps[1].sbar_text == "B caused this"
+
+    def test_sbar_change_on_next_anchor_sample_belongs_to_next_step(self):
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["focus_id", "sbar_text"], {"focus_id": self.B, "sbar_text": "with B"}),
+        )
+        tl = correlate(Recording.parse(self.REC_AB), log)
+        assert [s.t_start for s in tl.steps] == [pytest.approx(1.0), pytest.approx(2.0)]
+        assert tl.steps[0].sbar_text is None
+        assert tl.steps[1].sbar_text == "with B"
+
+    def test_sbar_stale_message_before_anchor_is_not_attributed(self):
+        # The text in force *at* the anchor is the previous step's (or the
+        # baseline's) outcome, not this step's.
+        log = _log(
+            (0.5, ["sbar_text"], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": "4 Einträge gefunden"}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": "4 Einträge gefunden"}),
+        )
+        tl = correlate(Recording.parse(self.REC_A), log)
+        assert tl.steps[0].t_start == pytest.approx(1.0)
+        assert tl.steps[0].sbar_text is None
+
+    @pytest.mark.parametrize("sentinel", ["<unreadable>", "<absent>"])
+    @pytest.mark.parametrize("where", ["at-anchor", "after-anchor"])
+    def test_sbar_sentinel_change_is_skipped(self, sentinel, where):
+        # A failed read inside the window is not this step's outcome, and must
+        # not fall back to the real value that was in force before the anchor.
+        if where == "at-anchor":
+            anchor = (1.0, ["focus_id", "sbar_text"], {"focus_id": self.A, "sbar_text": sentinel})
+            tail = ()
+        else:
+            anchor = (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": "old msg"})
+            tail = ((2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": sentinel}),)
+        log = _log((0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": "old msg"}), anchor, *tail)
+        tl = correlate(Recording.parse(self.REC_A), log)
+        assert tl.steps[0].t_start == pytest.approx(1.0)
+        assert tl.steps[0].sbar_text is None
+
+    def test_sbar_key_absent_from_baseline_still_read(self):
+        # A log whose status bar first became readable mid-run: the key is not
+        # in sample 0, and the message must still be found.
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell"}),
+            (1.0, ["focus_id"], {"focus_id": self.A}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "late key"}),
+        )
+        tl = correlate(Recording.parse(self.REC_A), log)
+        assert tl.steps[0].sbar_text == "late key"
+
+    def test_sbar_shared_by_collapsed_steps(self):
+        rec = Recording.parse(
+            self.REC_A
+            + 'session.findById("wnd[0]/usr/ctxtGD-TAB").setFocus\n'
+            + 'session.findById("wnd[0]/usr/ctxtGD-TAB").caretPosition = 4\n'
+        )
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, [], {"focus_id": self.A, "sbar_text": ""}),
+            (3.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "shared"}),
         )
         tl = correlate(rec, log)
-        assert tl.steps[0].sbar_text == "4 Einträge gefunden"
+        assert [s.t_start for s in tl.steps] == [pytest.approx(1.0)] * 3
+        assert [s.sbar_text for s in tl.steps] == ["shared"] * 3
+
+    def test_sbar_shared_by_keyboard_anchor_pair(self):
+        # okcd text + sendVKey share one transition sample, hence one window.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/tbar[0]/okcd").text = "/nse16n"\nsession.findById("wnd[0]").sendVKey 0\n'
+        )
+        log = _log(
+            (0.0, [], {"transaction": "SESSION_MANAGER", "sbar_text": ""}),
+            (1.0, ["transaction"], {"transaction": "SE16N", "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"transaction": "SE16N", "sbar_text": "SE16N entered"}),
+        )
+        tl = correlate(rec, log)
+        assert [s.strategy for s in tl.steps] == ["fingerprint-screen"] * 2
+        assert "keyboard-anchor" in tl.steps[1].flags
+        assert [s.sbar_text for s in tl.steps] == ["SE16N entered"] * 2
+
+    def test_sbar_shared_by_collapsed_fingerprint_presses(self):
+        rec = Recording.parse('session.findById("wnd[0]").sendVKey 0\nsession.findById("wnd[0]").sendVKey 0\n')
+        log = _log(
+            (0.0, [], {"screen_number": 100, "sbar_text": ""}),
+            (1.0, ["screen_number"], {"screen_number": 200, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"screen_number": 200, "sbar_text": "two presses"}),
+        )
+        tl = correlate(rec, log)
+        assert [s.strategy for s in tl.steps] == ["fingerprint-screen"] * 2
+        assert "sub-interval-collapse" in tl.steps[1].flags
+        assert [s.sbar_text for s in tl.steps] == ["two presses"] * 2
+
+    def test_sbar_shared_by_leftover_watch_assignment(self):
+        key = TestWatchRun.KEY
+        rec = Recording.parse(
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 8\n'
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 16\n'
+        )
+        log = _log(
+            (0.0, [], {key: "0", "sbar_text": ""}),
+            (1.0, [key], {key: "8", "sbar_text": ""}),
+            (2.0, ["sbar_text"], {key: "8", "sbar_text": "scrolled"}),
+        )
+        tl = correlate(rec, log)
+        assert [s.strategy for s in tl.steps] == ["watch-run"] * 2
+        assert "sub-interval-collapse" in tl.steps[1].flags
+        assert [s.sbar_text for s in tl.steps] == ["scrolled"] * 2
+
+    def test_sbar_last_step_window_runs_to_log_end(self):
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            *[(float(t), [], {"focus_id": self.A, "sbar_text": ""}) for t in range(2, 6)],
+            (6.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "at the very end"}),
+        )
+        tl = correlate(Recording.parse(self.REC_A), log)
+        assert tl.steps[0].sbar_text == "at the very end"
+
+    def test_sbar_last_change_in_window_wins(self):
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "first"}),
+            (3.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "second"}),
+        )
+        tl = correlate(Recording.parse(self.REC_A), log)
+        assert tl.steps[0].sbar_text == "second"
+
+    def test_sbar_cleared_bar_is_empty_string_not_none(self):
+        # SAP clearing the bar is an observed change; "" and None must stay distinguishable.
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": "old msg"}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": "old msg"}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": ""}),
+        )
+        tl = correlate(Recording.parse(self.REC_A), log)
+        assert tl.steps[0].sbar_text == ""
+
+    def test_sbar_none_for_unmatched_step(self):
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["sbar_text"], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": "noise"}),
+        )
+        tl = correlate(Recording.parse(self.REC_A), log)
+        assert tl.steps[0].strategy == "unmatched"
+        assert tl.steps[0].sbar_text is None
+
+    def test_sbar_change_between_matched_steps_skips_unmatched_middle(self):
+        # An unmatched step has no window, so it does not cut the earlier
+        # matched step's window short: the message belongs to A.
+        rec = Recording.parse(
+            self.REC_A
+            + 'session.findById("wnd[0]/tbar[1]/btn[8]").press\n'
+            + 'session.findById("wnd[0]/usr/ctxtGD-MAX_LINES").text = "500"\n'
+        )
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "between"}),
+            (3.0, ["focus_id"], {"focus_id": self.B, "sbar_text": "between"}),
+        )
+        tl = correlate(rec, log)
+        assert [s.strategy for s in tl.steps] == ["exact-focus", "unmatched", "exact-focus"]
+        assert [s.sbar_text for s in tl.steps] == ["between", None, None]
+
+    def test_sbar_reappearance_after_unreadable_is_not_a_change(self):
+        # The monitor flags 'A msg' -> '<unreadable>' -> 'A msg' as two
+        # changes; the second is the same readable message coming back, not
+        # something B caused.
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "A msg"}),
+            (3.0, ["focus_id"], {"focus_id": self.B, "sbar_text": "A msg"}),
+            (4.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "<unreadable>"}),
+            (5.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "A msg"}),
+        )
+        tl = correlate(Recording.parse(self.REC_AB), log)
+        assert [s.strategy for s in tl.steps] == ["exact-focus", "exact-focus"]
+        assert tl.steps[0].sbar_text == "A msg"
+        assert tl.steps[1].sbar_text is None
+
+    def test_sbar_reappearance_after_absent_is_a_change(self):
+        # Unlike <unreadable>, <absent> is a real state the monitor never
+        # carries forward (monitor._carry_forward_unreadable): the bar was
+        # gone, so the same text showing up again is a new message.
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "A msg"}),
+            (3.0, ["focus_id"], {"focus_id": self.B, "sbar_text": "A msg"}),
+            (4.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "<absent>"}),
+            (5.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "A msg"}),
+        )
+        tl = correlate(Recording.parse(self.REC_AB), log)
+        assert [s.strategy for s in tl.steps] == ["exact-focus", "exact-focus"]
+        assert tl.steps[0].sbar_text == "A msg"
+        assert tl.steps[1].sbar_text == "A msg"
 
     def test_sbar_none_without_sbar_keys(self):
         rec = Recording.parse('session.findById("wnd[0]/usr/ctxtGD-TAB").text = "T000"\n')
