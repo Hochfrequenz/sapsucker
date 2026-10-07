@@ -800,6 +800,23 @@ class TestSbarAndTranscript:
         assert tl.steps[0].sbar_text == "A msg"
         assert tl.steps[1].sbar_text is None
 
+    def test_sbar_reappearance_after_absent_is_a_change(self):
+        # Unlike <unreadable>, <absent> is a real state the monitor never
+        # carries forward (monitor._carry_forward_unreadable): the bar was
+        # gone, so the same text showing up again is a new message.
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "A msg"}),
+            (3.0, ["focus_id"], {"focus_id": self.B, "sbar_text": "A msg"}),
+            (4.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "<absent>"}),
+            (5.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "A msg"}),
+        )
+        tl = correlate(Recording.parse(self.REC_AB), log)
+        assert [s.strategy for s in tl.steps] == ["exact-focus", "exact-focus"]
+        assert tl.steps[0].sbar_text == "A msg"
+        assert tl.steps[1].sbar_text == "A msg"
+
     def test_sbar_none_without_sbar_keys(self):
         rec = Recording.parse('session.findById("wnd[0]/usr/ctxtGD-TAB").text = "T000"\n')
         log = _log((1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/usr/ctxtGD-TAB"}))

@@ -669,11 +669,29 @@ def _attach_sbar(steps_out: list[TimelineStep], anchor_idx: list[int | None], lo
 
     A readable change is a sample whose ``changed`` lists an ``sbar_*text`` key
     holding a non-sentinel string that differs from that key's last readable
-    value (a message reappearing after a sentinel read is not a change). The
+    value (a message reappearing after an ``<unreadable>`` read is not a
+    change; after ``<absent>`` it is, since the bar really was gone). The
     empty string counts (SAP cleared the
     bar) and is reported as ``""``; None means nothing readable changed in the
     window, or the step has no anchor. Keys are collected over the whole log,
     not sample 0: a bar that first became readable mid-run still counts.
+
+    Known limit, UNVERIFIED against a live SAP GUI: the timing rule above
+    (the message lands at or after the step's anchor and before the next
+    step's) is tested only on synthetic logs; no status-bar-bearing recording
+    has been checked. To verify, on a Windows machine with SAP GUI::
+
+        git fetch origin
+        git checkout fix/correlate-sbar-window
+        git pull
+        uv sync
+        uv run sapsucker-monitor -o sbarwindow.jsonl --record sbarwindow.vbs
+        # perform two steps that raise known, distinct status messages, stop
+        uv run sapsucker-correlate sbarwindow.vbs sbarwindow.jsonl -m sbarwindow.md
+
+    Each step's ``sbar_text`` in ``sbarwindow.md`` must be its own message.
+    Failure: None, a stale (previous) text, or the message attributed to the
+    following step.
     """
     sbar_keys = sorted({k for s in log.samples for k in s.values if k.startswith("sbar_") and k.endswith("text")})
     if not sbar_keys or not any(a is not None for a in anchor_idx):
@@ -690,6 +708,12 @@ def _attach_sbar(steps_out: list[TimelineStep], anchor_idx: list[int | None], lo
         text: str | None = None
         for key in sbar_keys:
             value = sample.values.get(key)
+            if value == _ABSENT:
+                # ABSENT is a real state (the bar was gone), never carried
+                # forward by the monitor: text after it is a new message even
+                # when it repeats the old one. UNREADABLE keeps the prior value.
+                last_readable.pop(key, None)
+                continue
             if not isinstance(value, str) or value in _SENTINELS:
                 continue
             if key in sample.changed and value != last_readable.get(key):
