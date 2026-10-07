@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from bisect import bisect_left, bisect_right
+from bisect import bisect_left, bisect_right, insort
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -189,10 +189,11 @@ class TimelineStep:
     #: Clock alignment is run metadata (``CorrelatedTimeline.clock_origin_assumed``),
     #: not a step flag.
     flags: tuple[str, ...] = ()
-    #: Last readable status-bar text at or before the matched sample; None when
-    #: unmatched or when the log has no status-bar keys. A message this step
-    #: causes one sample *after* its anchor shows up on the next step instead,
-    #: so treat it as context, not as this step's outcome (#131).
+    #: Last readable status-bar change observed between this step's anchor and
+    #: the next step's anchor (``""`` when SAP cleared the bar); None when
+    #: nothing changed there, when the step is unmatched, or when the log has no
+    #: status-bar keys. Steps sharing an anchor share the message. A system
+    #: message that happens to land in the window is attributed to the step too.
     sbar_text: str | None = None
     #: Transcript excerpts intersecting the matched window, verbatim.
     transcript: tuple[str, ...] = ()
@@ -353,15 +354,16 @@ class _LastMatched:
     """
 
     def __init__(self) -> None:
-        self._idx = -1
+        #: Index into ``steps_out`` of the row ``get`` last returned (-1: none yet).
+        self.index = -1
         self._seen = 0
 
     def get(self, steps_out: list[TimelineStep]) -> TimelineStep | None:
         for j in range(self._seen, len(steps_out)):
             if steps_out[j].strategy not in {"unmatched", "recorder-boilerplate"}:
-                self._idx = j
+                self.index = j
         self._seen = len(steps_out)
-        return steps_out[self._idx] if self._idx >= 0 else None
+        return steps_out[self.index] if self.index >= 0 else None
 
 
 def _consumes_event(step: RecordingStep) -> bool:
@@ -650,20 +652,58 @@ def _next_keyboard_step(steps: list[RecordingStep], from_idx: int) -> RecordingS
     return None
 
 
-def _sbar_at(log: MonitorLog, anchor: int) -> str | None:
-    """The status-bar text in force at *anchor*: the last change of any
-    ``sbar_text`` key at or before it, skipping sentinel values. None when the
-    log has no status-bar keys or nothing was ever read."""
-    sbar_keys = [k for k in log.samples[0].values if k.startswith("sbar_") and k.endswith("text")]
-    for key in sbar_keys:
-        last_good = None
-        for sample in log.samples[: anchor + 1]:
+def _attach_sbar(steps_out: list[TimelineStep], anchor_idx: list[int | None], log: MonitorLog) -> list[TimelineStep]:
+    """Set ``sbar_text`` to the last readable status-bar *change* inside each
+    step's window ``[anchor, next_anchor)``.
+
+    ``next_anchor`` is the smallest anchor of a *later* step that lies strictly
+    after this step's anchor (``len(samples)`` for the last one), so steps that
+    share an anchor — sub-interval collapses, a keyboard-anchor pair, modal
+    siblings — share one window and one message. SAP writes the message after
+    processing the step, i.e. one or more samples *after* the sample where the
+    step's cause became visible; the value in force *at* the anchor is the
+    previous step's outcome, which is why this is a window and not a point.
+
+    A readable change is a sample whose ``changed`` lists an ``sbar_*text`` key
+    holding a non-sentinel string. The empty string counts (SAP cleared the
+    bar) and is reported as ``""``; None means nothing readable changed in the
+    window, or the step has no anchor. Keys are collected over the whole log,
+    not sample 0: a bar that first became readable mid-run still counts.
+    """
+    sbar_keys = sorted({k for s in log.samples for k in s.values if k.startswith("sbar_") and k.endswith("text")})
+    if not sbar_keys or not any(a is not None for a in anchor_idx):
+        return steps_out
+    # change_at[i]: the readable text that changed in sample i, else None.
+    change_at: list[str | None] = []
+    for sample in log.samples:
+        text: str | None = None
+        for key in sbar_keys:
             value = sample.values.get(key)
-            if isinstance(value, str) and value not in _SENTINELS:
-                last_good = value
-        if last_good is not None:
-            return last_good
-    return None
+            if key in sample.changed and isinstance(value, str) and value not in _SENTINELS:
+                text = value
+        change_at.append(text)
+    # last_change_upto[i]: index of the last readable change at or before i, else -1.
+    last_change_upto: list[int] = []
+    last = -1
+    for i, text in enumerate(change_at):
+        if text is not None:
+            last = i
+        last_change_upto.append(last)
+
+    rebuilt: list[TimelineStep] = []  # filled back to front, reversed at the end
+    later_anchors: list[int] = []  # anchors of the steps after the current one, sorted
+    for step, anchor in zip(reversed(steps_out), reversed(anchor_idx), strict=True):
+        sbar: str | None = None
+        if anchor is not None:
+            pos = bisect_right(later_anchors, anchor)
+            upper = later_anchors[pos] if pos < len(later_anchors) else len(log.samples)
+            hit = last_change_upto[upper - 1]
+            if hit >= anchor:
+                sbar = change_at[hit]
+            insort(later_anchors, anchor)
+        rebuilt.append(TimelineStep(**{**step.__dict__, "sbar_text": sbar}))
+    rebuilt.reverse()
+    return rebuilt
 
 
 def correlate(
@@ -693,9 +733,19 @@ def correlate(
     window and are flagged ``sub-interval-collapse``.
     """
     steps_out: list[TimelineStep] = []
+    # anchor_idx[k]: the sample index steps_out[k] is anchored at (collapsed
+    # rows carry the anchor they inherit); None for unmatched and boilerplate
+    # rows. Kept as a parallel list rather than re-derived from t_start: a
+    # trimmed fixture may repeat ``elapsed`` values.
+    anchor_idx: list[int | None] = []
     cursor = 0
     prev_matched: TimelineStep | None = None
+    prev_anchor: int | None = None  # anchor_idx entry of prev_matched
     used_modals: dict[str, _ModalBracket] = {}
+    # watch key -> (anchor index, row) of the last step that consumed a change
+    # of that key, for the leftover collapse of same-key assignments the
+    # monitor caught fewer changes for than the recording has.
+    last_watch: dict[str, tuple[int, TimelineStep]] = {}
     modal_brackets = _modal_brackets(log)
     focus_index = _FocusIndex(log)
     # Events still wanted by the steps *after* the current one; the current step
@@ -729,6 +779,7 @@ def correlate(
                 later_suffixes[own_sfx] -= 1
         if step.member in _BOILERPLATE_MEMBERS:
             steps_out.append(_emit(step, "recorder-boilerplate", flags=()))
+            anchor_idx.append(None)
             continue
 
         # setFocus/caretPosition inherit the last step that took an anchor; an
@@ -741,25 +792,22 @@ def correlate(
             and collapse_from.t_start is not None
         ):
             steps_out.append(
-                TimelineStep(
-                    step.line_no,
-                    step.element_id,
-                    step.member,
-                    step.args,
+                _emit(
+                    step,
                     collapse_from.strategy,
-                    collapse_from.confidence,
-                    collapse_from.t_start,
-                    collapse_from.t_end,
-                    tuple(dict.fromkeys([*collapse_from.flags, "sub-interval-collapse"])),
-                    collapse_from.sbar_text,
-                    collapse_from.transcript,
+                    t_start=collapse_from.t_start,
+                    t_end=collapse_from.t_end,
+                    flags=tuple(dict.fromkeys([*collapse_from.flags, "sub-interval-collapse"])),
                 )
             )
+            anchor_idx.append(anchor_idx[last_matched.index])
             continue
 
         anchor: int | None = None
+        idx: int | None = None
         strategy: str | None = None
         flags: list[str] = []
+        watch_key: str | None = None
 
         # 1: watch-run — an assignment to an element whose watched property key
         # exists in the log (ALV scrolling never moves focus). Assignments try
@@ -767,39 +815,38 @@ def correlate(
         # more specific signal, and the focus move onto the element predates
         # every assignment after the first (the journey-5 scroll run).
         if step.args is not None and len(step.args) == 1:
+            watch_key = _watch_key_of(step.element_id, step.member)
             hit = _watch_run_anchor(log, cursor, step, consumed_watch)
-            idx = hit[0] if hit is not None else None
-            if (
-                idx is None
-                and prev_matched is not None
-                and prev_matched.strategy == "watch-run"
-                and prev_matched.element_id == step.element_id
-                and prev_matched.member == step.member
-            ):
+            leftover = last_watch.get(watch_key) if (hit is None and watch_key is not None) else None
+            if leftover is not None and leftover[0] == cursor:
                 # More same-property assignments than the monitor caught
                 # changes for — the documented collapse limit (journey-5: 6
-                # assignments, 4 change samples). The leftovers share the last
-                # observed window, flagged, rather than reading as unmatched.
+                # assignments, 4 change samples). The leftovers share that
+                # key's last observed window, flagged, rather than reading as
+                # unmatched — also when a *different* watch key's row sits in
+                # between (#131: FirstVisibleRow, CurrentCellRow,
+                # FirstVisibleRow with one shared change sample). The cursor
+                # guard is the correctness boundary: once a later step took a
+                # later anchor, the missed change happened after it, and the
+                # step stays unmatched rather than get a timestamp before an
+                # action known to be earlier.
                 # ``value-mismatch`` is per assignment: recompute it against the
                 # shared sample instead of inheriting the previous step's.
-                inherited = [f for f in prev_matched.flags if f != "value-mismatch"]
-                if _watch_value_of(log.samples[cursor], step) not in (None, step.args[0]):
+                shared_idx, shared_row = leftover
+                inherited = [f for f in shared_row.flags if f != "value-mismatch"]
+                if _watch_value_of(log.samples[shared_idx], step) not in (None, step.args[0]):
                     inherited.append("value-mismatch")
                 steps_out.append(
-                    TimelineStep(
-                        step.line_no,
-                        step.element_id,
-                        step.member,
-                        step.args,
+                    _emit(
+                        step,
                         "watch-run",
-                        "high",
-                        prev_matched.t_start,
-                        prev_matched.t_end,
-                        tuple(dict.fromkeys([*inherited, "sub-interval-collapse"])),
-                        prev_matched.sbar_text,
+                        t_start=shared_row.t_start,
+                        t_end=shared_row.t_end,
+                        flags=tuple(dict.fromkeys([*inherited, "sub-interval-collapse"])),
                     )
                 )
-                prev_matched = steps_out[-1]
+                anchor_idx.append(shared_idx)
+                prev_matched, prev_anchor = steps_out[-1], anchor_idx[-1]
                 continue
             if hit is not None:
                 idx, watch_key = hit
@@ -876,10 +923,10 @@ def correlate(
                     "fingerprint-screen",
                     t_start=prev_matched.t_start,
                     flags=("keyboard-anchor", "sub-interval-collapse"),
-                    sbar=prev_matched.sbar_text,
                 )
             )
-            prev_matched = steps_out[-1]
+            anchor_idx.append(prev_anchor)
+            prev_matched, prev_anchor = steps_out[-1], anchor_idx[-1]
             continue
         if (
             anchor is None
@@ -930,10 +977,10 @@ def correlate(
                         "fingerprint-screen",
                         t_start=prev_matched.t_start,
                         flags=("sub-interval-collapse",),
-                        sbar=prev_matched.sbar_text,
                     )
                 )
-                prev_matched = steps_out[-1]
+                anchor_idx.append(prev_anchor)
+                prev_matched, prev_anchor = steps_out[-1], anchor_idx[-1]
                 continue
 
         if anchor is not None:
@@ -947,20 +994,25 @@ def correlate(
                     t_start=sample.elapsed,
                     t_end=t_end_elapsed,
                     flags=tuple(flags),
-                    sbar=_sbar_at(log, anchor),
                 )
             )
+            anchor_idx.append(anchor)
+            if strategy == "watch-run":
+                assert watch_key is not None
+                last_watch[watch_key] = (anchor, steps_out[-1])
             # Monotonic cursor: a later step may share this anchor (sub-interval
             # actions collapse) but never lands before it. Sharing is what
             # makes two edits of one field two steps on one window; scanning
             # from the anchor itself (not anchor + 1) is what allows that.
             cursor = anchor
-            prev_matched = steps_out[-1]
+            prev_matched, prev_anchor = steps_out[-1], anchor_idx[-1]
             continue
 
         steps_out.append(_emit(step, "unmatched"))
-        prev_matched = steps_out[-1]
+        anchor_idx.append(None)
+        prev_matched, prev_anchor = steps_out[-1], anchor_idx[-1]
 
+    steps_out = _attach_sbar(steps_out, anchor_idx, log)
     steps_out = _attach_transcripts(steps_out, transcript, log.recorder_skew or 0.0)
 
     return CorrelatedTimeline(
@@ -1014,7 +1066,6 @@ def _emit(
     t_start: float | None = None,
     t_end: float | None = None,
     flags: tuple[str, ...] = (),
-    sbar: str | None = None,
 ) -> TimelineStep:
     return TimelineStep(
         line_no=step.line_no,
@@ -1026,5 +1077,4 @@ def _emit(
         t_start=t_start,
         t_end=t_end,
         flags=flags,
-        sbar_text=sbar,
     )
