@@ -192,7 +192,10 @@ class TimelineStep:
     #: Last readable status-bar change observed between this step's anchor and
     #: the next step's anchor (``""`` when SAP cleared the bar); None when
     #: nothing changed there, when the step is unmatched, or when the log has no
-    #: status-bar keys. Steps sharing an anchor share the message. A system
+    #: status-bar keys. "No change" includes an identical repeat of the
+    #: previous readable message (e.g. "No values found" twice, or a message
+    #: reappearing after an ``<unreadable>`` read): the bar text alone cannot
+    #: tell a repeat from no message. Steps sharing an anchor share the message. A system
     #: message that happens to land in the window is attributed to the step too.
     sbar_text: str | None = None
     #: Transcript excerpts intersecting the matched window, verbatim.
@@ -665,7 +668,9 @@ def _attach_sbar(steps_out: list[TimelineStep], anchor_idx: list[int | None], lo
     previous step's outcome, which is why this is a window and not a point.
 
     A readable change is a sample whose ``changed`` lists an ``sbar_*text`` key
-    holding a non-sentinel string. The empty string counts (SAP cleared the
+    holding a non-sentinel string that differs from that key's last readable
+    value (a message reappearing after a sentinel read is not a change). The
+    empty string counts (SAP cleared the
     bar) and is reported as ``""``; None means nothing readable changed in the
     window, or the step has no anchor. Keys are collected over the whole log,
     not sample 0: a bar that first became readable mid-run still counts.
@@ -674,13 +679,22 @@ def _attach_sbar(steps_out: list[TimelineStep], anchor_idx: list[int | None], lo
     if not sbar_keys or not any(a is not None for a in anchor_idx):
         return steps_out
     # change_at[i]: the readable text that changed in sample i, else None.
+    # "Changed" is measured against the key's last *readable* value, not the
+    # previous sample: the monitor flags 'A msg' -> '<unreadable>' -> 'A msg'
+    # as two changes, but the second is the old message coming back.
+    # Several keys ending in "text" changing in one sample: the last in sorted
+    # order wins (the monitor writes only ``sbar_text`` today).
     change_at: list[str | None] = []
+    last_readable: dict[str, str] = {}
     for sample in log.samples:
         text: str | None = None
         for key in sbar_keys:
             value = sample.values.get(key)
-            if key in sample.changed and isinstance(value, str) and value not in _SENTINELS:
+            if not isinstance(value, str) or value in _SENTINELS:
+                continue
+            if key in sample.changed and value != last_readable.get(key):
                 text = value
+            last_readable[key] = value
         change_at.append(text)
     # last_change_upto[i]: index of the last readable change at or before i, else -1.
     last_change_upto: list[int] = []
@@ -1010,6 +1024,9 @@ def correlate(
 
         steps_out.append(_emit(step, "unmatched"))
         anchor_idx.append(None)
+        # The unmatched step happened after every watch row so far, at an
+        # unknown time: a later leftover must not collapse back past it.
+        last_watch.clear()
         prev_matched, prev_anchor = steps_out[-1], anchor_idx[-1]
 
     steps_out = _attach_sbar(steps_out, anchor_idx, log)

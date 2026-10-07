@@ -389,7 +389,11 @@ class TestWatchRun:
         assert tl.steps[2].t_start is None
 
     @pytest.mark.parametrize(("third", "expect_mismatch"), [("16", True), ("8", False)])
-    def test_leftover_value_mismatch_uses_shared_sample(self, third, expect_mismatch):
+    def test_leftover_value_mismatch_recomputed_through_other_watch_key(self, third, expect_mismatch):
+        # ``value-mismatch`` is recomputed for the leftover row rather than
+        # inherited from the row it collapses onto. Which sample it is computed
+        # against is not observable here: the cursor guard makes the shared
+        # sample and the cursor sample the same one.
         fvr, ccr = self.KEY, self.CCR
         rec = Recording.parse(
             'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 8\n'
@@ -404,6 +408,23 @@ class TestWatchRun:
         assert [s.strategy for s in tl.steps] == ["watch-run"] * 3
         assert "value-mismatch" not in tl.steps[0].flags
         assert ("value-mismatch" in tl.steps[2].flags) is expect_mismatch
+
+    def test_leftover_not_collapsed_across_unmatched_step(self):
+        # An unmatched press between the two FirstVisibleRow assignments
+        # happened after the first one; collapsing the third step onto t=1.0
+        # would timestamp it before an action known to be earlier.
+        rec = Recording.parse(
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 8\n'
+            'session.findById("wnd[0]/tbar[1]/btn[8]").press\n'
+            'session.findById("wnd[0]/shellcont/shell").firstVisibleRow = 16\n'
+        )
+        log = _log(
+            (0.0, [], {self.KEY: "0"}),
+            (1.0, [self.KEY], {self.KEY: "8"}),
+        )
+        tl = correlate(rec, log)
+        assert [s.strategy for s in tl.steps] == ["watch-run", "unmatched", "unmatched"]
+        assert tl.steps[2].t_start is None
 
     def test_exact_focus_wins_over_watch_run(self):
         # In a real recording the focus moves to the shell before the scroll
@@ -743,6 +764,41 @@ class TestSbarAndTranscript:
         tl = correlate(Recording.parse(self.REC_A), log)
         assert tl.steps[0].strategy == "unmatched"
         assert tl.steps[0].sbar_text is None
+
+    def test_sbar_change_between_matched_steps_skips_unmatched_middle(self):
+        # An unmatched step has no window, so it does not cut the earlier
+        # matched step's window short: the message belongs to A.
+        rec = Recording.parse(
+            self.REC_A
+            + 'session.findById("wnd[0]/tbar[1]/btn[8]").press\n'
+            + 'session.findById("wnd[0]/usr/ctxtGD-MAX_LINES").text = "500"\n'
+        )
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "between"}),
+            (3.0, ["focus_id"], {"focus_id": self.B, "sbar_text": "between"}),
+        )
+        tl = correlate(rec, log)
+        assert [s.strategy for s in tl.steps] == ["exact-focus", "unmatched", "exact-focus"]
+        assert [s.sbar_text for s in tl.steps] == ["between", None, None]
+
+    def test_sbar_reappearance_after_unreadable_is_not_a_change(self):
+        # The monitor flags 'A msg' -> '<unreadable>' -> 'A msg' as two
+        # changes; the second is the same readable message coming back, not
+        # something B caused.
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell", "sbar_text": ""}),
+            (1.0, ["focus_id"], {"focus_id": self.A, "sbar_text": ""}),
+            (2.0, ["sbar_text"], {"focus_id": self.A, "sbar_text": "A msg"}),
+            (3.0, ["focus_id"], {"focus_id": self.B, "sbar_text": "A msg"}),
+            (4.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "<unreadable>"}),
+            (5.0, ["sbar_text"], {"focus_id": self.B, "sbar_text": "A msg"}),
+        )
+        tl = correlate(Recording.parse(self.REC_AB), log)
+        assert [s.strategy for s in tl.steps] == ["exact-focus", "exact-focus"]
+        assert tl.steps[0].sbar_text == "A msg"
+        assert tl.steps[1].sbar_text is None
 
     def test_sbar_none_without_sbar_keys(self):
         rec = Recording.parse('session.findById("wnd[0]/usr/ctxtGD-TAB").text = "T000"\n')
