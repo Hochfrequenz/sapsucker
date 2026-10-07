@@ -151,6 +151,8 @@ scripts/benchmark_output*.txt
 # Scratch/dump files — never check in (includes binaries and one-off dumps;
 # same gate as sensitive-data: stop before commit, not after)
 *.jsonl
+# ...except committed, trimmed monitor-log fixtures (see docs/spike/README.md).
+!docs/spike/*.trimmed.jsonl
 coverage.txt
 typelib.json
 exe/

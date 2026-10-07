@@ -17,10 +17,15 @@ from sapsucker._recording import Recording
 
 SPIKE = Path(__file__).parent.parent / "docs" / "spike"
 
-# The real journey-6 JSONL (4134 samples) lives only on the machine that
-# recovered it from git history (commit 3581a44^:journey6_bp_timing.jsonl);
-# point SAPSUCKER_CORRELATE_J6 at it to run the cross-journey acceptance gate.
-J6 = os.environ.get("SAPSUCKER_CORRELATE_J6")
+# Journey 6 (recorded 2026-08-26): the committed fixture is the full 4134-sample log
+# (commit 3581a44^:journey6_bp_timing.jsonl) trimmed by scripts/trim_monitor_log.py;
+# see docs/spike/README.md. SAPSUCKER_CORRELATE_J6 optionally points at the full log
+# so the same assertions can be re-checked against it locally.
+J6_TRIMMED = SPIKE / "journey6_bp_timing.trimmed.jsonl"
+J6_FULL = os.environ.get("SAPSUCKER_CORRELATE_J6")
+J6_PATHS = [pytest.param(J6_TRIMMED, id="trimmed")]
+if J6_FULL and Path(J6_FULL).exists():
+    J6_PATHS.append(pytest.param(Path(J6_FULL), id="full"))
 
 
 def _log(*rows):
@@ -572,10 +577,11 @@ class TestDurationsAndSkew:
         assert correlate(rec, log, transcript=late).steps[0].transcript == ()
 
 
-@pytest.mark.skipif(
-    not J6 or not Path(J6).exists(),
-    reason="journey-6 JSONL is not committed (scratch corpus); set SAPSUCKER_CORRELATE_J6 to run locally",
-)
+def _j6(path):
+    return load_monitor_log(Path(path).read_text(encoding="utf-8").splitlines())
+
+
+@pytest.mark.parametrize("log_path", J6_PATHS)
 class TestJourney6Acceptance:
     """The cross-journey pairing the prototype scored 17/18 on (#126).
 
@@ -584,17 +590,68 @@ class TestJourney6Acceptance:
     ddic-suffix strategy exists for.
     """
 
-    def test_cross_journey_score(self):
-        rec = Recording.load("docs/spike/journey3_bp.vbs")
-        log = load_monitor_log(Path(J6).read_text(encoding="utf-8").splitlines())
-        tl = correlate(rec, log)
+    def test_cross_journey_score(self, log_path):
+        rec = Recording.load(SPIKE / "journey3_bp.vbs")
+        tl = correlate(rec, _j6(log_path))
         counts = Counter(s.strategy for s in tl.steps)
         assert counts["exact-focus"] == 10
         assert counts["ddic-suffix"] == 3
         assert counts["modal-bracket"] == 2
         assert counts["fingerprint-screen"] == 1
+        assert counts["fingerprint-title"] == 1
         assert counts["recorder-boilerplate"] == 1
         assert counts["unmatched"] == 0, counts
+        assert sum(counts.values()) == 18
+
+    def test_ddic_suffix_rows_are_pinned(self, log_path):
+        # The counts alone do not prove *which* sample each suffix match landed on.
+        tl = correlate(Recording.load(SPIKE / "journey3_bp.vbs"), _j6(log_path))
+        rows = [s for s in tl.steps if s.strategy == "ddic-suffix"]
+        assert [s.member for s in rows] == ["text", "setFocus", "caretPosition"]
+        assert all(s.element_id.endswith("txtSZA11_0100-TEL_NUMBER") for s in rows)
+        assert [s.t_start for s in rows] == [34.984] * 3
+        assert all("layout-sensitive" in s.flags for s in rows)
+        assert [("sub-interval-collapse" in s.flags) for s in rows] == [False, True, True]
+
+
+@pytest.mark.parametrize("log_path", J6_PATHS)
+class TestJourney6Modal:
+    """Modal bracket and title fingerprint pinned on a real log.
+
+    Every number below was read from the recorded log, not invented: a trim or
+    loader regression that shifts a sample index or a clock value fails here.
+    """
+
+    def _steps(self, log_path):
+        log = _j6(log_path)
+        return log, correlate(Recording.load(SPIKE / "journey3_bp.vbs"), log).steps
+
+    def test_title_fingerprint_step(self, log_path):
+        log, steps = self._steps(log_path)
+        (step,) = [s for s in steps if s.strategy == "fingerprint-title"]
+        assert step.member == "press"
+        assert step.element_id.endswith("tbar[1]/btn[5]")
+        assert step.t_start == pytest.approx(13.484)
+        # The anchor sample really is a wnd[0]:Text change, with the new title.
+        (sample,) = [x for x in log.samples if x.elapsed == step.t_start]
+        assert "wnd[0]:Text" in sample.changed
+        assert sample.values["wnd[0]:Text"] == "Person anlegen"
+
+    def test_modal_brackets_span_the_dialog(self, log_path):
+        log, steps = self._steps(log_path)
+        modal = [s for s in steps if s.strategy == "modal-bracket"]
+        assert [s.element_id for s in modal] == ["wnd[1]/usr/btnBUTTON_1", "wnd[1]/usr/btnBUTTON_2"]
+        assert {(s.t_start, s.t_end) for s in modal} == {(42.359, 47.593)}
+        opened = next(x for x in log.samples if x.elapsed == 42.359)
+        closed = next(x for x in log.samples if x.elapsed == 47.593)
+        assert opened.values["wnd[1]:Text"] == "Warnung"
+        assert closed.values["wnd[1]:Text"] == "<absent>"
+
+    def test_no_status_bar_keys_so_no_sbar_text(self, log_path):
+        # Journey 6 predates the status-bar sampling (#127): nothing to attribute.
+        log, steps = self._steps(log_path)
+        assert not any(k.startswith("sbar_") for x in log.samples for k in x.values)
+        assert all(s.sbar_text is None for s in steps)
 
 
 class TestSbarAndTranscript:
