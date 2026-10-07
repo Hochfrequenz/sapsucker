@@ -46,7 +46,11 @@ def parse_srt(text: str) -> tuple[TranscriptEntry, ...]:
 
     Raises:
         ValueError: On a cue line that does not match the SRT timestamp shape,
-            has minutes or seconds of 60 or more, or ends before it starts.
+            has minutes or seconds of 60 or more, or ends before it starts;
+            or if the file holds no cue at all. ``-t`` promises
+            ``transcript_origin_assumed: true`` on every record, which a
+            cue-less file would silently break (no entries reads as no
+            transcript), so it is an error rather than an empty transcript.
     """
     entries: list[TranscriptEntry] = []
     current: tuple[float, float] | None = None
@@ -73,6 +77,8 @@ def parse_srt(text: str) -> tuple[TranscriptEntry, ...]:
                 raise ValueError(f"not an SRT timestamp line: {line!r}")
         else:
             chunks.append(line)
+    if not entries:
+        raise ValueError("SRT has no cues")
     return tuple(entries)
 
 

@@ -1045,6 +1045,23 @@ class TestCli:
         )
         assert result.exit_code == 2
 
+    @pytest.mark.parametrize("content", ["", "\n\n", "﻿", "1\n2\n"])
+    def test_cli_cue_less_transcript_exits_2(self, tmp_path, content):
+        # -t promises transcript_origin_assumed: true on every record; a file
+        # with no cues would silently write false, so it is rejected instead.
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
+
+        from sapsucker.correlate_cli import app
+
+        empty = tmp_path / "empty.srt"
+        empty.write_text(content, encoding="utf-8")
+        out = tmp_path / "t.jsonl"
+        args = [str(SPIKE / "journey5_bp.vbs"), str(SPIKE / "journey5_timing.jsonl"), "-t", str(empty), "-o", str(out)]
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 2, result.output
+        assert "bad --transcript: SRT has no cues" in " ".join(result.stderr.split())
+        assert not out.exists()
+
     def test_parse_srt_round_trip(self):
         from sapsucker.correlate_cli import parse_srt
 

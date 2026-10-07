@@ -234,7 +234,8 @@ sapsucker-correlate journey3.vbs timing.jsonl -m timeline.md
 measured `recorder_skew` (without a header the shift is 0, i.e. relative to the monitor
 origin); that the narration starts with the recorder is an unverified assumption. With
 `-t`, the CLI prints a one-line notice saying so and every JSONL record carries
-`"transcript_origin_assumed": true`.
+`"transcript_origin_assumed": true`. An SRT with no cues is rejected (exit 2) rather than
+treated as no transcript.
 Each recorded statement is timestamped by the first strategy that fits, and the strategy
 is reported per step: `exact-focus`, `ddic-suffix`, `watch-run`, `modal-bracket`,
 `fingerprint-screen`, `fingerprint-title`, `recorder-boilerplate`, or `unmatched`.
