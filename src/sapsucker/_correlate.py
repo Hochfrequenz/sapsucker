@@ -17,6 +17,26 @@ limit, flagged as such) but never lands before it.
 Pure library code: no COM involved, everything here is testable in CI against
 synthetic logs and the committed corpus in ``docs/spike/``.
 
+Known limits (none of this has been run against a live SAP GUI):
+
+- **Transcript origin is unverified.** Cues are shifted by the measured
+  ``recorder_skew`` and so assume the narration (SRT time 0) started together with
+  the recorder. Whether a capture setup really does that cannot be established in
+  code; ``test_recorder_skew_shifts_transcript_cues`` pins only the shift
+  direction. Pass an offset-corrected SRT otherwise.
+- **Status-bar attribution has only synthetic tests.** No committed monitor log has
+  ``sbar_*`` keys (journeys 5 and 6 predate #127). The window rule — the last
+  readable status-bar change between a step's anchor and the next step's anchor —
+  is exercised by hand-built logs only. To record a real run, see
+  ``docs/spike/README.md`` (copy-paste command and what counts as a failed run).
+- **System messages in a step's window are attributed to that step** and not
+  flagged.
+- **A watch assignment whose value equals the current one** leaves no change in the
+  log and stays ``unmatched``.
+- **``fingerprint-screen`` vs ``fingerprint-title`` cannot be told apart on a
+  tie:** the two sample indices never coincide in the data, so ``<`` and ``<=``
+  behave the same (#133).
+
 Example::
 
     from sapsucker._correlate import correlate, load_monitor_log
@@ -259,6 +279,11 @@ class CorrelatedTimeline:
             out.append(
                 "Clock alignment: **assumed** — this log has no `--record` header, so monitor origin ≈ "
                 "recording start (manual pairing). Timestamps carry that skew."
+            )
+        if any(step.transcript for step in self.steps):
+            out.append(
+                "Transcript: cues assume the narration started together with the recorder (unverified); "
+                "pass an offset-corrected SRT otherwise."
             )
         counts = ", ".join(f"{n} {name}" for name, n in sorted(self.strategy_counts.items()))
         out.append(f"Steps: {counts}.")

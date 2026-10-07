@@ -928,6 +928,17 @@ class TestRender:
         assert "exact-focus" in md
         assert "| line |" in md
 
+    def test_markdown_warns_about_transcript_origin_only_with_transcript(self):
+        # Mutation: drop the preamble line (or emit it unconditionally) and one of these fails.
+        rec = Recording.parse(self_REC)
+        log = _log(
+            (0.0, [], {"focus_id": f"{FOCUS}/wnd[0]/shellcont/shell"}),
+            (1.0, ["focus_id"], {"focus_id": f"{FOCUS}/wnd[0]/tbar[0]/okcd"}),
+        )
+        with_cue = correlate(rec, log, transcript=(TranscriptEntry(0.9, 1.1, "typing the transaction"),))
+        assert "assume the narration started together with the recorder (unverified)" in with_cue.to_markdown()
+        assert "unverified" not in self._tl().to_markdown()
+
 
 self_REC = (
     'session.findById("wnd[0]").resizeWorkingPane 152,33,false\n'
@@ -958,6 +969,15 @@ class TestCli:
         assert result.exit_code == 0, result.output
         assert out.exists() and out.read_text(encoding="utf-8").strip()
         assert "watch-run" in md.read_text(encoding="utf-8")
+
+    def test_cli_help_states_transcript_origin_assumption(self):
+        CliRunner = pytest.importorskip("typer.testing").CliRunner
+
+        from sapsucker.correlate_cli import app
+
+        result = CliRunner().invoke(app, ["--help"])
+        assert result.exit_code == 0, result.output
+        assert "unverified" in " ".join(result.output.split())
 
     def test_cli_missing_transcript_format_exits_2(self, tmp_path):
         CliRunner = pytest.importorskip("typer.testing").CliRunner

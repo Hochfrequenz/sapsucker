@@ -39,6 +39,11 @@ pass we produce, with minimal manual steps and no third-party recorder:
   to the transaction change, and the un-narratable `btn[5]` pinned by #82
   Finding 4's fingerprint (title changes, screen number doesn't). Only
   `resizeWorkingPane` (line-1 recorder boilerplate) has no timestamp, by design.
+  (CI-checked by `TestJourney6Acceptance` against the trimmed fixture
+  `docs/spike/journey6_bp_timing.trimmed.jsonl`.) **Not verified:** that a narration
+  transcript starts at the recorder start (the `recorder_skew` shift assumes it), and
+  status-bar attribution against a real log (synthetic tests only); see the
+  Known limits in `src/sapsucker/_correlate.py`.
 - **The corpus survives on this machine.** The recorder's configured output
   folder (registry `HKCU\...\Scripting\SaveScriptTo`) holds journey3/4/5/6,
   `journey_se16n` and `se16but000` (UTF-16). `se16but000.vbs` is confirmed as

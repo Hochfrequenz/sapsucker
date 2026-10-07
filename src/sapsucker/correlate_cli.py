@@ -83,7 +83,15 @@ def main(
     ],
     monitor_log: Annotated[Path, typer.Argument(exists=True, dir_okay=False, help="JSONL from sapsucker-monitor.")],
     transcript: Annotated[
-        Path | None, typer.Option("--transcript", "-t", help="Optional narration transcript (SRT).")
+        Path | None,
+        typer.Option(
+            "--transcript",
+            "-t",
+            help=(
+                "Optional narration transcript (SRT). Assumes the narration started together with the "
+                "recorder (unverified); pass an offset-corrected SRT otherwise."
+            ),
+        ),
     ] = None,
     out: Annotated[Path, typer.Option("--out", "-o", help="JSONL timeline output path.")] = Path("timeline.jsonl"),
     markdown: Annotated[
