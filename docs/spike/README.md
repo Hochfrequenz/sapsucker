@@ -23,8 +23,20 @@ in CI rather than only against hand-built ones.
 - **Content:** element ids, window titles, screen numbers and wall-clock `at`
   stamps. No field values.
 - **No status-bar data.** This log has no `sbar_*` keys (it predates #127), so
-  the status-bar attribution is covered by synthetic tests only. See the PR
-  that added this fixture for the command that records a real run.
+  the status-bar attribution is covered by synthetic tests only. A real run
+  needs a human with SAP GUI:
+
+  ```powershell
+  git fetch origin
+  git checkout <branch>
+  git pull
+  uv sync --group dev
+  uv run sapsucker-monitor --record journey_se16n_sbar.vbs --interval 0.2 --out journey_se16n_sbar.jsonl
+  # then play docs/spike/journey_se16n.vbs by hand in the recorder; stop the monitor; attach both files.
+  ```
+
+  The JSONL must contain `sbar_text` with at least one non-empty value after the
+  execute (`sendVKey 8`); otherwise the run is useless for this purpose.
 
 Git ignores `*.jsonl`; this file is tracked with `git add -f`, like
 `journey5_timing.jsonl`.
