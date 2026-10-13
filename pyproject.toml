@@ -119,7 +119,7 @@ tests = [
     { include-group = "cli_group" },
 ]
 linting = [
-    "ruff==0.16.10",
+    "ruff==0.17.0",
 ]
 type_check = [
     "mypy==2.4.0",
