@@ -19,7 +19,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v10.3.2
         with:
-          python-version: "3.14"
+          python-version: "3.15"
 
       - name: Build Executable
         run: uv run --locked --group build_executable pyinstaller --noconfirm sapsucker_monitor_windows.spec
@@ -45,7 +45,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v10.3.2
         with:
-          python-version: "3.14"
+          python-version: "3.15"
 
       - name: Download Executable
         uses: actions/download-artifact@v8
@@ -58,7 +58,7 @@ jobs:
       # any COM work, and that a missing SAP GUI produces a diagnostic rather
       # than a traceback — which is a path that has regressed before.
       - name: Smoke Test
-        run: uv run --no-project --python 3.14 python unittests/smoke_test_exe.py dist/sapsucker_monitor_windows.exe
+        run: uv run --no-project --python 3.15 python unittests/smoke_test_exe.py dist/sapsucker_monitor_windows.exe
 
   release:
     needs: [build, smoke_test]
