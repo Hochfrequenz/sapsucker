@@ -1,6 +1,6 @@
 """SAP GUI desktop login/logoff helpers.
 
-Lessons learned from live testing against HF S/4 (S4U, client 100):
+Lessons learned from live testing against an SAP S/4HANA system:
 
 - Each login() opens a NEW connection (con[N]) via app.open_connection().
   This is NOT the same as opening a new session/mode (/o) within an
@@ -115,8 +115,8 @@ def login(
     that already shares the same ``connection_name``**. This makes it
     legal to be logged into the same SAP Logon entry as multiple
     distinct ``(client, user)`` tuples concurrently — for example one
-    background sub-agent in client 100 and another in client 210, both
-    via "HF S/4". If you instead want serial-switching semantics
+    background sub-agent in one client and another in a second client, both
+    via "My S/4 System". If you instead want serial-switching semantics
     (close any prior matching connection first), call
     :func:`close_connections_named` explicitly before ``login()``.
 
@@ -128,7 +128,7 @@ def login(
        now need to call :func:`close_connections_named` yourself.
 
     Args:
-        connection_name: SAP Logon entry name (e.g. "HF S/4").
+        connection_name: SAP Logon entry name (e.g. "My S/4 System").
         client: SAP client/mandant (e.g. "100").
         user: SAP username.
         password: SAP password.
