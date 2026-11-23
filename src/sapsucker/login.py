@@ -27,6 +27,8 @@ Lessons learned from live testing against HF S/4 (S4U, client 100):
 from __future__ import annotations
 
 import logging
+import ntpath
+import os
 import sys
 import time
 from typing import TYPE_CHECKING, Any, cast
@@ -48,20 +50,50 @@ __all__ = [
 ]
 
 _FALLBACK_SAPLOGON_PATH = r"C:\Program Files\SAP\FrontEnd\SAPGUI\saplogon.exe"
+_FALLBACK_SAPLOGON_PATH_X86 = r"C:\Program Files (x86)\SAP\FrontEnd\SAPGUI\saplogon.exe"
+_SAP_SHARED_KEY = r"SOFTWARE\SAP\SAP Shared"
 
 
 def discover_saplogon_path() -> str:
-    """Read the SAP GUI install dir from the Windows registry, fall back to the default path."""
+    """Locate ``saplogon.exe`` via the Windows registry, falling back to the default install paths.
+
+    SAP GUI exists as a 32-bit and a 64-bit build. The 32-bit installer registers
+    ``SAPsysdir`` under ``WOW6432Node``, which 64-bit Python does not read by default
+    (issue #170), so both registry views are queried explicitly, 64-bit first. The
+    first candidate that exists on disk wins; after the registry come the default
+    install directories of the 64-bit and the 32-bit build.
+
+    If no candidate exists, the first one is returned unchanged (the registered path
+    if there is one, else the 64-bit default), so the launch error names that path.
+
+    Verified against a real 64-bit SAP GUI install only. The 32-bit case (value present
+    only under ``WOW6432Node``) is covered by unit tests against a fake registry; the
+    issue's author reports that equivalent logic works on such an install. It has not
+    been run by us.
+    """
     if sys.platform != "win32":
         return _FALLBACK_SAPLOGON_PATH
-    try:
-        import winreg  # pylint: disable=import-outside-toplevel,import-error
+    import winreg  # pylint: disable=import-outside-toplevel,import-error
 
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\SAP\SAP Shared") as key:
-            sap_sysdir, _ = winreg.QueryValueEx(key, "SAPsysdir")
-            return rf"{sap_sysdir}\saplogon.exe"
-    except OSError:
-        return _FALLBACK_SAPLOGON_PATH
+    candidates: list[str] = []
+    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _SAP_SHARED_KEY, 0, winreg.KEY_READ | view) as key:
+                sap_sysdir, _ = winreg.QueryValueEx(key, "SAPsysdir")
+        except OSError:
+            # Key or value missing in this view. A 64-bit install leaves a
+            # "SAP Shared" key without SAPsysdir in the 32-bit view.
+            continue
+        if not isinstance(sap_sysdir, str) or not sap_sysdir.strip():
+            # An empty value would make the candidate the relative "saplogon.exe",
+            # which Windows resolves against the working directory.
+            continue
+        candidates.append(ntpath.join(sap_sysdir, "saplogon.exe"))
+    candidates += [_FALLBACK_SAPLOGON_PATH, _FALLBACK_SAPLOGON_PATH_X86]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return candidates[0]
 
 
 def login(
@@ -101,7 +133,8 @@ def login(
         user: SAP username.
         password: SAP password.
         language: Login language (default "EN").
-        saplogon_exe_path: Path to saplogon.exe (default: standard install path).
+        saplogon_exe_path: Path to saplogon.exe, used only if SAP Logon is not
+            already running (default: :func:`discover_saplogon_path`).
         timeout: Max seconds to wait for connection/session to become available.
 
     Returns:
