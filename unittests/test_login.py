@@ -67,35 +67,137 @@ def _make_mock_session(
     return session
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="winreg only available on Windows")
+_X64_SYSDIR = r"C:\Program Files\SAP\FrontEnd\SAPGUI"
+_X86_SYSDIR = r"C:\Program Files (x86)\SAP\FrontEnd\SAPGUI"
+_X64_EXE = _X64_SYSDIR + r"\saplogon.exe"
+_X86_EXE = _X86_SYSDIR + r"\saplogon.exe"
+
+
+class _FakeWinreg:
+    r"""Stand-in for ``winreg`` that models the two WOW64 registry views.
+
+    ``views`` maps ``"64"``/``"32"`` to the values under ``SOFTWARE\SAP\SAP Shared``
+    in that view, or to ``None`` when the key is absent. An ``access`` mask without a
+    WOW64 flag reads the 64-bit view, which is what 64-bit Python does (checked
+    against a real install: the default view and ``KEY_WOW64_64KEY`` return the same
+    values, ``KEY_WOW64_32KEY`` returns the ``WOW6432Node`` ones).
+    """
+
+    HKEY_LOCAL_MACHINE = 0x80000002
+    KEY_READ = 0x20019
+    KEY_WOW64_64KEY = 0x0100
+    KEY_WOW64_32KEY = 0x0200
+
+    def __init__(self, views: dict[str, dict[str, str] | None]) -> None:
+        self._views = views
+        self.opened: list[tuple[int, str, int]] = []
+
+    def OpenKey(self, key: int, sub_key: str, reserved: int = 0, access: int = 0x20019) -> MagicMock:  # noqa: N802
+        self.opened.append((key, sub_key, access))
+        assert key == self.HKEY_LOCAL_MACHINE
+        assert reserved == 0
+        view = "32" if access & self.KEY_WOW64_32KEY else "64"
+        values = self._views.get(view) if sub_key == r"SOFTWARE\SAP\SAP Shared" else None
+        if values is None:
+            raise FileNotFoundError(2, "The system cannot find the file specified")
+        handle = MagicMock()
+        handle.__enter__ = lambda s: s
+        handle.__exit__ = MagicMock(return_value=False)
+        handle.values = values
+        return handle
+
+    @staticmethod
+    def QueryValueEx(key: MagicMock, name: str) -> tuple[str, int]:  # noqa: N802
+        if name not in key.values:
+            raise FileNotFoundError(2, "The system cannot find the file specified")
+        return key.values[name], 1
+
+
+def _discover(views: dict[str, dict[str, str] | None], existing: set[str]) -> tuple[str, _FakeWinreg]:
+    """Run discover_saplogon_path() against a fake registry and a fake file system."""
+    fake = _FakeWinreg(views)
+    with (
+        patch.object(sys, "platform", "win32"),
+        patch.dict(sys.modules, {"winreg": fake}),
+        patch("sapsucker.login.os.path.isfile", side_effect=lambda p: p in existing),
+    ):
+        return discover_saplogon_path(), fake
+
+
 class TestDiscoverSaplogonPath:
-    """Tests for discover_saplogon_path()."""
+    """Tests for discover_saplogon_path() (issue #170)."""
 
-    def test_reads_path_from_registry(self):
-        """Returns saplogon.exe path from the SAPsysdir registry value."""
-        import winreg  # pylint: disable=import-outside-toplevel
+    def test_64bit_install(self):
+        """64-bit SAP GUI: SAPsysdir in the 64-bit view. Shape of a real 64-bit install,
+        whose 32-bit view has the key but only SAPSetupDir, no SAPsysdir."""
+        result, _ = _discover(
+            {"64": {"SAPsysdir": _X64_SYSDIR}, "32": {"SAPSetupDir": r"C:\Program Files (x86)\SAP\SAPsetup"}},
+            {_X64_EXE},
+        )
+        assert result == _X64_EXE
 
-        mock_key = MagicMock()
-        mock_key.__enter__ = lambda s: mock_key
-        mock_key.__exit__ = MagicMock(return_value=False)
+    def test_32bit_install_registered_under_wow6432node(self):
+        """32-bit SAP GUI from 64-bit Python: the value exists only in the 32-bit view."""
+        result, _ = _discover({"64": None, "32": {"SAPsysdir": _X86_SYSDIR}}, {_X86_EXE})
+        assert result == _X86_EXE
 
-        with (
-            patch.object(winreg, "OpenKey", return_value=mock_key) as mock_open,
-            patch.object(winreg, "QueryValueEx", return_value=(r"D:\SAP\FrontEnd\SAPGUI", 1)),
-        ):
-            result = discover_saplogon_path()
+    def test_reads_both_views_with_explicit_flags(self):
+        """Each view is opened read-only with an explicit WOW64 flag, 64-bit first."""
+        _, fake = _discover({"64": None, "32": None}, set())
+        assert [access for _, _, access in fake.opened] == [
+            fake.KEY_READ | fake.KEY_WOW64_64KEY,
+            fake.KEY_READ | fake.KEY_WOW64_32KEY,
+        ]
 
-        assert result == r"D:\SAP\FrontEnd\SAPGUI\saplogon.exe"
-        mock_open.assert_called_once_with(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\SAP\SAP Shared")
+    def test_64bit_view_wins_when_both_exist(self):
+        """Both builds registered and present: the 64-bit one is preferred."""
+        result, _ = _discover(
+            {"64": {"SAPsysdir": _X64_SYSDIR}, "32": {"SAPsysdir": _X86_SYSDIR}},
+            {_X64_EXE, _X86_EXE},
+        )
+        assert result == _X64_EXE
 
-    def test_falls_back_when_registry_missing(self):
-        """Returns fallback path when registry key does not exist."""
-        import winreg  # pylint: disable=import-outside-toplevel
+    def test_skips_registry_path_that_does_not_exist(self):
+        """A stale 64-bit registration does not shadow an existing 32-bit install."""
+        result, _ = _discover(
+            {"64": {"SAPsysdir": r"D:\gone\SAPGUI"}, "32": {"SAPsysdir": _X86_SYSDIR}},
+            {_X86_EXE},
+        )
+        assert result == _X86_EXE
 
-        with patch.object(winreg, "OpenKey", side_effect=OSError("Key not found")):
-            result = discover_saplogon_path()
+    def test_handles_trailing_backslash_in_sysdir(self):
+        """SAPsysdir with a trailing separator yields a single separator."""
+        result, _ = _discover({"64": {"SAPsysdir": "D:\\SAP\\SAPGUI\\"}, "32": None}, {r"D:\SAP\SAPGUI\saplogon.exe"})
+        assert result == r"D:\SAP\SAPGUI\saplogon.exe"
 
+    def test_no_registry_finds_x86_default(self):
+        """No registration at all: the (x86) default install path is found."""
+        result, _ = _discover({"64": None, "32": None}, {_X86_EXE})
+        assert result == _X86_EXE
+
+    def test_no_registry_finds_x64_default_first(self):
+        """No registration, both defaults present: the 64-bit default is preferred."""
+        result, _ = _discover({"64": None, "32": None}, {_X64_EXE, _X86_EXE})
+        assert result == _X64_EXE
+
+    def test_nothing_exists_returns_registry_path(self):
+        """Nothing on disk: return the registered path, as before #170, so the launch
+        error names the path SAP GUI claims to be installed at."""
+        result, _ = _discover({"64": {"SAPsysdir": r"D:\gone\SAPGUI"}, "32": None}, set())
+        assert result == r"D:\gone\SAPGUI\saplogon.exe"
+
+    def test_nothing_at_all_returns_fallback(self):
+        """No registry entry and nothing on disk: the historic fallback path."""
+        result, _ = _discover({"64": None, "32": None}, set())
         assert result == _FALLBACK_SAPLOGON_PATH
+
+    def test_non_windows_returns_fallback_without_registry(self):
+        """Off Windows the registry is never touched."""
+        fake = _FakeWinreg({"64": {"SAPsysdir": _X64_SYSDIR}, "32": None})
+        with patch.object(sys, "platform", "linux"), patch.dict(sys.modules, {"winreg": fake}):
+            result = discover_saplogon_path()
+        assert result == _FALLBACK_SAPLOGON_PATH
+        assert not fake.opened
 
 
 class TestLogin:
