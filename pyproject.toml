@@ -113,7 +113,7 @@ default-groups = []
 
 [dependency-groups]
 tests = [
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
     # unittests/test_monitor_cli.py drives the typer CLI.
