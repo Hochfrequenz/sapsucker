@@ -67,8 +67,9 @@ def discover_saplogon_path() -> str:
     if there is one, else the 64-bit default), so the launch error names that path.
 
     Verified against a real 64-bit SAP GUI install only. The 32-bit case (value present
-    only under ``WOW6432Node``) is covered by unit tests against a fake registry and
-    was reported working by the issue's author; it has not been run by us.
+    only under ``WOW6432Node``) is covered by unit tests against a fake registry; the
+    issue's author reports that equivalent logic works on such an install. It has not
+    been run by us.
     """
     if sys.platform != "win32":
         return _FALLBACK_SAPLOGON_PATH
@@ -83,7 +84,11 @@ def discover_saplogon_path() -> str:
             # Key or value missing in this view. A 64-bit install leaves a
             # "SAP Shared" key without SAPsysdir in the 32-bit view.
             continue
-        candidates.append(ntpath.join(str(sap_sysdir), "saplogon.exe"))
+        if not isinstance(sap_sysdir, str) or not sap_sysdir.strip():
+            # An empty value would make the candidate the relative "saplogon.exe",
+            # which Windows resolves against the working directory.
+            continue
+        candidates.append(ntpath.join(sap_sysdir, "saplogon.exe"))
     candidates += [_FALLBACK_SAPLOGON_PATH, _FALLBACK_SAPLOGON_PATH_X86]
     for candidate in candidates:
         if os.path.isfile(candidate):

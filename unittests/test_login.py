@@ -88,8 +88,9 @@ class _FakeWinreg:
     KEY_WOW64_64KEY = 0x0100
     KEY_WOW64_32KEY = 0x0200
 
-    def __init__(self, views: dict[str, dict[str, str] | None]) -> None:
+    def __init__(self, views: dict[str, dict[str, object] | None], denied: frozenset[str] = frozenset()) -> None:
         self._views = views
+        self._denied = denied
         self.opened: list[tuple[int, str, int]] = []
 
     def OpenKey(self, key: int, sub_key: str, reserved: int = 0, access: int = 0x20019) -> MagicMock:  # noqa: N802
@@ -97,6 +98,9 @@ class _FakeWinreg:
         assert key == self.HKEY_LOCAL_MACHINE
         assert reserved == 0
         view = "32" if access & self.KEY_WOW64_32KEY else "64"
+        if view in self._denied:
+            # What OpenKey raises for a key whose ACL denies read access.
+            raise PermissionError(13, "Access is denied")
         values = self._views.get(view) if sub_key == r"SOFTWARE\SAP\SAP Shared" else None
         if values is None:
             raise FileNotFoundError(2, "The system cannot find the file specified")
@@ -107,15 +111,17 @@ class _FakeWinreg:
         return handle
 
     @staticmethod
-    def QueryValueEx(key: MagicMock, name: str) -> tuple[str, int]:  # noqa: N802
+    def QueryValueEx(key: MagicMock, name: str) -> tuple[object, int]:  # noqa: N802
         if name not in key.values:
             raise FileNotFoundError(2, "The system cannot find the file specified")
         return key.values[name], 1
 
 
-def _discover(views: dict[str, dict[str, str] | None], existing: set[str]) -> tuple[str, _FakeWinreg]:
+def _discover(
+    views: dict[str, dict[str, object] | None], existing: set[str], denied: frozenset[str] = frozenset()
+) -> tuple[str, _FakeWinreg]:
     """Run discover_saplogon_path() against a fake registry and a fake file system."""
-    fake = _FakeWinreg(views)
+    fake = _FakeWinreg(views, denied)
     with (
         patch.object(sys, "platform", "win32"),
         patch.dict(sys.modules, {"winreg": fake}),
@@ -164,6 +170,27 @@ class TestDiscoverSaplogonPath:
             {_X86_EXE},
         )
         assert result == _X86_EXE
+
+    def test_access_denied_view_is_skipped(self):
+        """A view whose key cannot be read (PermissionError, e.g. a restrictive ACL)
+        is skipped like a missing one instead of escaping login()."""
+        result, _ = _discover(
+            {"64": {"SAPsysdir": _X64_SYSDIR}, "32": {"SAPsysdir": _X86_SYSDIR}}, {_X86_EXE}, denied=frozenset({"64"})
+        )
+        assert result == _X86_EXE
+
+    def test_registered_x86_beats_unregistered_x64_default(self):
+        """Documented behaviour change (#170): only the 32-bit view registers SAP GUI,
+        but an exe also sits at the 64-bit default path. The registered one wins."""
+        result, _ = _discover({"64": None, "32": {"SAPsysdir": _X86_SYSDIR}}, {_X64_EXE, _X86_EXE})
+        assert result == _X86_EXE
+
+    @pytest.mark.parametrize("bad_value", ["", "   ", 42])
+    def test_unusable_sysdir_is_skipped(self, bad_value):
+        """An empty or non-string SAPsysdir would yield a relative 'saplogon.exe', which
+        Windows resolves against the working directory. Such a value is ignored."""
+        result, _ = _discover({"64": {"SAPsysdir": bad_value}, "32": None}, {"saplogon.exe"})
+        assert result == _FALLBACK_SAPLOGON_PATH
 
     def test_handles_trailing_backslash_in_sysdir(self):
         """SAPsysdir with a trailing separator yields a single separator."""
